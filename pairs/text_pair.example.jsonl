@@ -1,0 +1,2 @@
+{"pair_id":"logic_001","positive_prompt":"List the premises, derive each implication, and check that the conclusion follows.","negative_prompt":"Answer from intuition without laying out logical dependencies.","image_paths":[],"metadata":{"source":"manual"}}
+

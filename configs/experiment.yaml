@@ -1,0 +1,64 @@
+experiment:
+  # Provisional taxonomy. IDs and descriptions may be changed without code edits.
+  capabilities:
+    - id: text_logic
+      modality: text
+      description: Structured logical decomposition and valid deduction.
+      pair_path: pairs/text_logic.jsonl
+    - id: text_quantitative
+      modality: text
+      description: Explicit numerical representation and verified calculation.
+      pair_path: pairs/text_quantitative.jsonl
+    - id: text_relevance
+      modality: text
+      description: Selection of task-relevant evidence while ignoring distractors.
+      pair_path: pairs/text_relevance.jsonl
+    - id: vision_detail
+      modality: visual
+      description: Fine-grained visual perception, including small text and symbols.
+      pair_path: pairs/vision_detail.jsonl
+    - id: vision_spatial
+      modality: visual
+      description: Spatial layout, geometry, position, and relation understanding.
+      pair_path: pairs/vision_spatial.jsonl
+    - id: vision_grounding
+      modality: visual
+      description: Grounding language and conclusions in the correct visual evidence.
+      pair_path: pairs/vision_grounding.jsonl
+  target_layer: 23
+  vector_scaling: mean_norm
+  alphas: [-1.0, -0.5, 0.0, 0.5, 1.0]
+  seed: 42
+  generation:
+    backend: transformers  # transformers | vllm_hook
+    checkpoint_rows: 100
+  vllm_hook:
+    base_url: http://localhost:8770/v1
+    api_key: EMPTY
+    request_concurrency: 16
+    request_timeout_seconds: 600
+    max_retries: 1
+    consecutive_error_limit: 5
+    # Linux same-host default: send file:// URLs instead of repeatedly embedding base64.
+    # The vLLM server must use --allowed-local-media-path for this directory.
+    media_transport: file  # file | data_url
+    # Set these when the vLLM process/container sees different mount paths.
+    server_media_root: null
+    server_vector_root: null
+    phase: both
+    positions: last_token
+    # Compare baseline/steered first-token logprobs before a large run. This uses
+    # one diagnostic token only and does not change model.max_new_tokens.
+    verify_steering_effect: true
+    steering_probe_top_logprobs: 20
+    steering_probe_tolerance: 1.0e-6
+    steering_probe_alpha: null  # null selects the configured alpha with largest magnitude
+    # Fill these for formal runs so results from different server builds never
+    # share a generation run ID. They are recorded in every stage manifest too.
+    server_provenance:
+      vllm_version: null
+      mia_revision: null
+      served_model_revision: null
+  paths:
+    data_dir: data
+    outputs_dir: outputs

@@ -1,0 +1,2 @@
+{"pair_id":"detail_001","prompt":"Read the smallest visible label and use it to answer the question.","positive_image_paths":["path/to/original.png"],"negative_image_paths":["path/to/blurred.png"],"metadata":{"transform":"downsample_blur","severity":1}}
+
