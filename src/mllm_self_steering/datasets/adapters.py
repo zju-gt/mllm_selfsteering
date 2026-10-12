@@ -42,15 +42,13 @@ def _choice_map(raw: Any) -> dict[str, str] | None:
 
 def _choices_from_inline_question(question: str) -> dict[str, str] | None:
     marker = re.search(r"(?is)\b(?:options|choices)\s*:\s*", question)
-    if not marker:
-        return None
-    tail = question[marker.end() :]
-    matches = list(
-        re.finditer(
-            r"(?i)(?:^|[,;]\s*|\s+)(?:\(([A-Z])\)|([A-Z])\s*[:.)])\s*",
-            tail,
-        )
+    tail = question[marker.end() :] if marker else question
+    pattern = (
+        r"(?i)(?:^|[,;]\s*|\s+)(?:\(([A-Z])\)|([A-Z])\s*[:.)])\s*"
+        if marker
+        else r"(?im)(?:^|\n)\s*(?:\(([A-Z])\)|([A-Z])\s*[:.)])\s*"
     )
+    matches = list(re.finditer(pattern, tail))
     if not matches:
         return None
     choices: dict[str, str] = {}
@@ -62,7 +60,11 @@ def _choices_from_inline_question(question: str) -> dict[str, str] | None:
 
 
 def _render_choices(question: str, choices: dict[str, str] | None) -> str:
-    if not choices or re.search(r"(?i)\b(?:options|choices)\s*:", question):
+    if (
+        not choices
+        or re.search(r"(?i)\b(?:options|choices)\s*:", question)
+        or _choices_from_inline_question(question)
+    ):
         return question.strip()
     rendered = "\n".join(f"{label}. {text}" for label, text in choices.items())
     return f"{question.strip()}\n\nOptions:\n{rendered}"

@@ -1,0 +1,37 @@
+{
+  "capabilities": {
+    "text_logic": {
+      "count": 128,
+      "image_files": 0,
+      "jsonl_sha256": "2b189ca9b31374b335e12baee606f65cd88de326ed63926e03deae760374b433"
+    },
+    "text_quantitative": {
+      "count": 128,
+      "image_files": 0,
+      "jsonl_sha256": "c2e6c1d0edb6fb44dec2e2f8161955e54f62de6f202490c768f8672ce419a2be"
+    },
+    "text_relevance": {
+      "count": 128,
+      "image_files": 0,
+      "jsonl_sha256": "82fac9b82e63222e93c541e7eaaf3b0d9f534da8eb95aa09498e62685ba774ad"
+    },
+    "vision_detail": {
+      "count": 128,
+      "image_files": 256,
+      "jsonl_sha256": "b9b23ebfe1d6ca2a94f537a1bb0bdebfbb5085c03b47bb5daef98d63f01a6503"
+    },
+    "vision_grounding": {
+      "count": 128,
+      "image_files": 256,
+      "jsonl_sha256": "d461780e7ae34cc2e2ef720b88390918f753ad880d2b81a04727ffd9326d1f3d"
+    },
+    "vision_spatial": {
+      "count": 128,
+      "image_files": 256,
+      "jsonl_sha256": "cdcfe8e13c706fd0a9daecc62cf656b3529acffbc0cafa6f4f1bdd3af41b1695"
+    }
+  },
+  "evaluation_independent": true,
+  "generator_version": "synthetic-controlled-v1.1",
+  "seed": 20261012
+}

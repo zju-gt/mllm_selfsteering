@@ -6,8 +6,8 @@ directions from controlled text or image contrasts and evaluates continuous stee
 on MMStar, MMMU, MathVista, and MathVision.
 
 There is no annotation API and no demand-scoring stage. Vector extraction consumes
-only user-curated inputs; benchmark answers are used only after generation for local
-evaluation.
+only controlled contrast inputs; benchmark answers are used only after generation
+for local evaluation.
 
 ## Benchmark configuration
 
@@ -27,7 +27,9 @@ absolute image paths.
 ```text
 00 benchmark download/canonicalization
   ↓
-01 validate six manually curated contrast-pair files
+00b generate six evaluation-independent controlled contrast-pair files
+  ↓
+01 validate the six contrast-pair files
   ↓
 02 capture positive - negative activation deltas with Transformers
   ↓
@@ -45,6 +47,7 @@ Run from this directory:
 ```bash
 python -m pip install -e ".[dev]"
 python scripts/00_prepare_data.py
+python scripts/00_prepare_pairs.py
 python scripts/01_validate_pairs.py
 python scripts/02_capture_contrasts.py
 python scripts/03_extract_vectors.py
@@ -59,7 +62,9 @@ formal run.
 
 ## Contrast pairs
 
-Populate the six files under `pairs/` using the schemas in [pairs/README.md](pairs/README.md).
+Generate the six configured files with `python scripts/00_prepare_pairs.py`, or
+replace them with reviewed manual pairs using the schemas in
+[pairs/README.md](pairs/README.md).
 The provisional taxonomy and proposed visual controls are described in
 [docs/capability_design.md](docs/capability_design.md). The taxonomy lives entirely in
 YAML and can be renamed or replaced without changing Python code, provided it remains
