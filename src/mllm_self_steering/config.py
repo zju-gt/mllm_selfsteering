@@ -78,6 +78,16 @@ def validate_config(config: dict[str, Any]) -> None:
         if not isinstance(config.get(section), dict):
             raise ConfigError(f"missing {section} configuration")
 
+    runtime = config.get("_runtime", {})
+    if not isinstance(runtime, dict):
+        raise ConfigError("_runtime must be a mapping")
+    for key in ("limit", "data_limit", "pair_limit", "eval_limit"):
+        value = runtime.get(key)
+        if value is not None and (
+            not isinstance(value, int) or isinstance(value, bool) or value < 1
+        ):
+            raise ConfigError(f"_runtime.{key} must be a positive integer")
+
     model = config["model"]
     if not isinstance(model.get("name"), str) or not model["name"].strip():
         raise ConfigError("model.name must be non-empty")

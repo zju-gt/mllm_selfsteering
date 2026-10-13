@@ -56,8 +56,14 @@ def _paths(config: dict[str, Any], project_root: Path) -> tuple[Path, Path]:
     return data, outputs
 
 
-def _limit(config: dict[str, Any], rows: list[Any]) -> list[Any]:
-    value = config.get("_runtime", {}).get("limit")
+def _runtime_limit(config: dict[str, Any], scope: str) -> int | None:
+    runtime = config.get("_runtime", {})
+    value = runtime.get(f"{scope}_limit", runtime.get("limit"))
+    return int(value) if value is not None else None
+
+
+def _limit(config: dict[str, Any], rows: list[Any], *, scope: str) -> list[Any]:
+    value = _runtime_limit(config, scope)
     return rows[: int(value)] if value is not None else rows
 
 
@@ -100,7 +106,7 @@ def capture_artifact_id(config: dict[str, Any], project_root: Path) -> str:
         "capabilities": config["experiment"]["capabilities"],
         "pair_hashes": pair_hashes,
         "image_hashes": image_hashes,
-        "limit": config.get("_runtime", {}).get("limit"),
+        "limit": _runtime_limit(config, "pair"),
         "capture_contract": "qwen3-vl-language-decoder-final-prompt-token-v1",
     }
     return _identity(identity)
@@ -118,7 +124,7 @@ def prepare_data(config: dict[str, Any], project_root: Path) -> dict[str, Path]:
             name,
             source,
             image_root=data_dir / "images",
-            limit=config.get("_runtime", {}).get("limit"),
+            limit=_runtime_limit(config, "data"),
         )
         path = data_dir / "processed" / f"{name}.jsonl"
         write_jsonl(path, (item.to_dict() for item in items))
@@ -164,7 +170,11 @@ def capture_contrasts(
     for capability in config["experiment"]["capabilities"]:
         name = str(capability["id"])
         index[name] = []
-        pairs = _limit(config, load_capability_pairs(project_root, capability))
+        pairs = _limit(
+            config,
+            load_capability_pairs(project_root, capability),
+            scope="pair",
+        )
         for pair in tqdm(pairs, desc=name):
             path = root / name / f"{_safe_name(pair.pair_id)}.safetensors"
             if not path.is_file():
@@ -334,7 +344,7 @@ def steering_artifact_id(config: dict[str, Any], project_root: Path) -> str:
         if backend == "vllm_hook"
         else None,
         "max_new_tokens": config["model"].get("max_new_tokens"),
-        "limit": config.get("_runtime", {}).get("limit"),
+        "limit": _runtime_limit(config, "eval"),
         "evaluation": {
             name: sha256_file(data_dir / "processed" / f"{name}.jsonl")
             for name in config["data"]["enabled_datasets"]
@@ -723,7 +733,10 @@ def run_steering(
     items: list[MultimodalItem] = []
     for dataset in config["data"]["enabled_datasets"]:
         rows = list(read_jsonl(data_dir / "processed" / f"{dataset}.jsonl"))
-        items.extend(MultimodalItem.from_dict(row) for row in _limit(config, rows))
+        items.extend(
+            MultimodalItem.from_dict(row)
+            for row in _limit(config, rows, scope="eval")
+        )
     capabilities = list(capability_map(config))
     alphas = [float(value) for value in config["experiment"]["alphas"]]
     total = len(items) * len(capabilities) * len(alphas)
@@ -828,7 +841,9 @@ def score_generations(config: dict[str, Any], project_root: Path) -> dict[str, P
     expected_items: dict[str, list[str]] = {}
     for dataset in config["data"]["enabled_datasets"]:
         source = _limit(
-            config, list(read_jsonl(data_dir / "processed" / f"{dataset}.jsonl"))
+            config,
+            list(read_jsonl(data_dir / "processed" / f"{dataset}.jsonl")),
+            scope="eval",
         )
         expected_items[dataset] = [
             item_identity(MultimodalItem.from_dict(row)) for row in source

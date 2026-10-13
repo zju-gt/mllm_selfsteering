@@ -56,9 +56,15 @@ python scripts/05_run_steering.py
 python scripts/06_score_generations.py
 ```
 
-Use the same `--limit N` on every downstream command in a smoke run. Unlike the earlier project, the limit is part of
-capture and generation artifact identities, so smoke artifacts cannot overwrite a
-formal run.
+For a stage-by-stage Chinese operations guide, including inputs, outputs, smoke tests,
+resume behavior, and acceptance checks, see
+[docs/pipeline_guide_zh.md](docs/pipeline_guide_zh.md).
+
+Use `--pair-limit N` to limit contrast pairs in stages 02-04 and `--eval-limit N`
+to limit evaluation items per dataset in stages 05-06. Pass `--pair-limit N` to
+stages 05-06 only when selecting vectors that were captured with that pair limit.
+The legacy `--limit N` still applies one value to every scope. Limits are part of
+artifact identities, so smoke artifacts cannot overwrite a formal run.
 
 ## Contrast pairs
 
