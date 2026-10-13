@@ -33,6 +33,8 @@ experiment:
     backend: transformers  # transformers | vllm_hook
     checkpoint_rows: 100
   vllm_hook:
+    # mia: current MIA/vLLM 0.29 protocol; vllm_hook_v0_2: legacy CUDA-12 path.
+    protocol: mia
     base_url: http://localhost:8770/v1
     api_key: EMPTY
     request_concurrency: 16

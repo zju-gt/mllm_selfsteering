@@ -338,7 +338,10 @@ def steering_artifact_id(config: dict[str, Any], project_root: Path) -> str:
         "alphas": config["experiment"]["alphas"],
         "backend": backend,
         "vllm_hook": {
-            **{key: vllm_config.get(key) for key in ("phase", "positions")},
+            **{
+                key: vllm_config.get(key)
+                for key in ("protocol", "phase", "positions")
+            },
             "server_provenance": vllm_config.get("server_provenance", {}),
         }
         if backend == "vllm_hook"
@@ -536,6 +539,7 @@ async def _run_vllm_steering(
         model_name=str(config["model"]["name"]),
         timeout_seconds=float(vllm_config.get("request_timeout_seconds", 600)),
         max_retries=int(vllm_config.get("max_retries", 1)),
+        protocol=str(vllm_config.get("protocol", "mia")),
     )
 
     def base_row(
@@ -555,6 +559,7 @@ async def _run_vllm_steering(
             "gold_answer": item.gold_answer,
             "answer_type": item.answer_type,
             "backend": "vllm_hook",
+            "vllm_hook_protocol": str(vllm_config.get("protocol", "mia")),
             "vector_scaling": scaling,
         }
 

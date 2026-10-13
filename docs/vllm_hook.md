@@ -18,6 +18,29 @@ The upstream project currently validates its MIA branch with vLLM 0.29.0, PyTorc
 2.13.0, Python 3.11-3.14, CUDA 13, and H100 hardware. Keep it in a dedicated
 environment rather than installing it into the Transformers extraction environment.
 
+## CUDA 12 legacy compatibility mode
+
+Hosts that cannot run CUDA 13 can try the pinned legacy stack in
+`docker/vllm_hook_v0_2`: IBM vLLM-Hook v0.2.0 on vLLM 0.12.0 and its CUDA 12.8
+runtime. Select it on the client with:
+
+```bash
+--override experiment.vllm_hook.protocol=vllm_hook_v0_2
+```
+
+The compatibility mode translates the current `phase=both, positions=last_token`
+semantics into v0.2's `apply_at_all_positions=true`: modify the last prompt token,
+then each single-token cached decode step. It also supports `phase=prefill`. The old
+worker cannot express decode-only or all-token steering, and configuration validation
+rejects those combinations instead of silently changing the experiment.
+
+This route is intentionally isolated in Docker. Do not install vLLM 0.12 into the
+Transformers extraction environment. Driver 550 falls inside CUDA 12.x minor-version
+compatibility, but JIT kernels can still expose driver/toolchain incompatibilities;
+the Stage 05 log-probability effect probe remains mandatory. See the image-specific
+build, launch, and smoke-test commands in
+`docker/vllm_hook_v0_2/README.md`.
+
 vLLM-Hook expects one PyTorch file per direction:
 
 ```python
@@ -44,6 +67,9 @@ MIA_WORKER=steer \
   --gpu-memory-utilization 0.8 \
   --allowed-local-media-path "$PROJECT_ROOT/data"
 ```
+
+The command above is for current MIA only. The legacy image uses
+`VLLM_HOOK_WORKER=steer`, which is already set in its Dockerfile.
 
 Then run the client from the project directory:
 

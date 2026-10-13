@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -7,6 +8,7 @@ import pytest
 from mllm_self_steering.models.vllm_hook import (
     AsyncVLLMHookClient,
     _signatures_differ,
+    build_steer_config,
     build_vllm_messages,
     map_server_path,
 )
@@ -71,6 +73,51 @@ def test_steering_probe_detects_ignored_and_changed_logprobs() -> None:
     )
 
 
+def test_legacy_protocol_maps_current_semantics() -> None:
+    both = build_steer_config(
+        protocol="vllm_hook_v0_2",
+        vector_path="/vectors/test.pt",
+        target_layer=23,
+        alpha=0.5,
+        phase="both",
+        positions="last_token",
+    )
+    assert both["apply_at_all_positions"] is True
+    assert "phase" not in both
+    assert "positions" not in both
+
+    prefill = build_steer_config(
+        protocol="vllm_hook_v0_2",
+        vector_path="/vectors/test.pt",
+        target_layer=23,
+        alpha=0.5,
+        phase="prefill",
+        positions="last_token",
+    )
+    assert prefill["apply_at_all_positions"] is False
+
+
+def test_legacy_protocol_rejects_unrepresentable_semantics() -> None:
+    with pytest.raises(ValueError, match="last-token"):
+        build_steer_config(
+            protocol="vllm_hook_v0_2",
+            vector_path="/vectors/test.pt",
+            target_layer=23,
+            alpha=1.0,
+            phase="both",
+            positions="all_tokens",
+        )
+    with pytest.raises(ValueError, match="decode-only"):
+        build_steer_config(
+            protocol="vllm_hook_v0_2",
+            vector_path="/vectors/test.pt",
+            target_layer=23,
+            alpha=1.0,
+            phase="decode",
+            positions="last_token",
+        )
+
+
 class _FakeCompletions:
     def __init__(self, logprobs: list[float]) -> None:
         self.logprobs = iter(logprobs)
@@ -97,6 +144,7 @@ def _probe_client(logprobs: list[float]) -> tuple[AsyncVLLMHookClient, _FakeComp
         chat=SimpleNamespace(completions=completions)
     )
     client._model_name = "model"
+    client._protocol = "mia"
     return client, completions
 
 
@@ -135,3 +183,24 @@ def test_effect_probe_accepts_changed_logprobs() -> None:
             tolerance=1e-6,
         )
     )
+
+
+def test_effect_probe_uses_legacy_payload() -> None:
+    client, completions = _probe_client([-0.1, -0.2])
+    client._protocol = "vllm_hook_v0_2"
+    asyncio.run(
+        client.verify_steering_effect(
+            messages=[],
+            vector_path="/vectors/test.pt",
+            target_layer=23,
+            alpha=1.0,
+            phase="both",
+            positions="last_token",
+            top_logprobs=20,
+            tolerance=1e-6,
+        )
+    )
+    encoded = completions.calls[1]["extra_body"]["vllm_xargs"]["steer"]
+    steer = json.loads(encoded)
+    assert steer["apply_at_all_positions"] is True
+    assert "phase" not in steer

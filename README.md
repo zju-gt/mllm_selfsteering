@@ -103,6 +103,11 @@ python scripts/05_run_steering.py \
 ```
 
 See [docs/vllm_hook.md](docs/vllm_hook.md) for server setup and compatibility limits.
+For driver-550/CUDA-12 hosts, the repository also provides the pinned experimental
+image and protocol adapter under
+[`docker/vllm_hook_v0_2`](docker/vllm_hook_v0_2/README.md). Keep
+`verify_steering_effect=true`; a successful HTTP response alone does not prove that
+the legacy hook modified model activations.
 The generated `.pt` files follow the current MIA contract: `{"dir": vector}`. The
 configured intervention uses `phase=both`, `positions=last_token`, and 0-based decoder
 block indices, matching the Transformers reference hook.

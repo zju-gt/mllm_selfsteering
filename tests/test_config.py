@@ -94,3 +94,18 @@ def test_vllm_probe_configuration_is_validated() -> None:
             ],
             ["experiment.vllm_hook.steering_probe_top_logprobs=21"],
         )
+
+
+def test_legacy_vllm_hook_protocol_rejects_decode_only() -> None:
+    with pytest.raises(ConfigError, match="phase=both or phase=prefill"):
+        load_config(
+            [
+                ROOT / "configs/model.yaml",
+                ROOT / "configs/data.yaml",
+                ROOT / "configs/experiment.yaml",
+            ],
+            [
+                "experiment.vllm_hook.protocol=vllm_hook_v0_2",
+                "experiment.vllm_hook.phase=decode",
+            ],
+        )

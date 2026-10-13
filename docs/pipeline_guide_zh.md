@@ -477,6 +477,18 @@ python scripts/05_run_steering.py \
 客户端会在大规模运行前执行一次 steering-effect probe。如果 baseline 和 steered 的
 首 token logprobs 完全相同，会快速失败，避免在 hook 未生效时生成大量无效结果。
 
+如果宿主机是 550 驱动、不能运行 CUDA 13，可按
+`docker/vllm_hook_v0_2/README.md` 尝试固定的 CUDA 12 兼容栈，并额外传入：
+
+```bash
+--override experiment.vllm_hook.protocol=vllm_hook_v0_2
+```
+
+该模式把当前 `phase=both, positions=last_token` 精确映射为旧插件的
+`apply_at_all_positions=true`。旧插件不支持 decode-only 或 all-token 语义，配置阶段会
+直接拒绝这两种组合。这个兼容栈必须通过默认开启的 steering-effect probe 后才能用于
+实验；仅服务启动成功或返回 HTTP 200 不能证明 hook 已经生效。
+
 ## 10. Stage 06：完整性检查与评分
 
 ### 命令

@@ -167,6 +167,11 @@ def validate_config(config: dict[str, Any]) -> None:
     ):
         raise ConfigError("generation.checkpoint_rows must be a positive integer")
     vllm = config["experiment"].get("vllm_hook", {})
+    protocol = vllm.get("protocol", "mia")
+    if protocol not in {"mia", "vllm_hook_v0_2"}:
+        raise ConfigError(
+            "vllm_hook.protocol must be mia or vllm_hook_v0_2"
+        )
     for key, default in (
         ("request_concurrency", 16),
         ("max_retries", 1),
@@ -201,6 +206,15 @@ def validate_config(config: dict[str, Any]) -> None:
         raise ConfigError("vllm_hook.phase must be both, prefill, or decode")
     if vllm.get("positions", "last_token") not in {"all_tokens", "last_token"}:
         raise ConfigError("vllm_hook.positions must be all_tokens or last_token")
+    if protocol == "vllm_hook_v0_2":
+        if vllm.get("positions", "last_token") != "last_token":
+            raise ConfigError(
+                "vllm_hook_v0_2 only supports positions=last_token"
+            )
+        if vllm.get("phase", "both") not in {"both", "prefill"}:
+            raise ConfigError(
+                "vllm_hook_v0_2 supports phase=both or phase=prefill"
+            )
     verify_effect = vllm.get("verify_steering_effect", True)
     if not isinstance(verify_effect, bool):
         raise ConfigError("vllm_hook.verify_steering_effect must be boolean")
