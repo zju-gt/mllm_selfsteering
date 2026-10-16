@@ -254,3 +254,77 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ConfigError(
                 f"vllm_hook.server_provenance.{key} must be null or a non-empty string"
             )
+
+    adaptive = config["experiment"].get("adaptive_steering", {})
+    if not isinstance(adaptive, dict):
+        raise ConfigError("adaptive_steering must be a mapping")
+    if adaptive.get("selector_prompt_version", "v1") != "v1":
+        raise ConfigError("adaptive_steering.selector_prompt_version must be v1")
+    selector_temperature = adaptive.get("selector_temperature", 0.6)
+    if (
+        isinstance(selector_temperature, bool)
+        or not isinstance(selector_temperature, (int, float))
+        or not math.isfinite(float(selector_temperature))
+        or not 0.0 <= float(selector_temperature) <= 2.0
+    ):
+        raise ConfigError(
+            "adaptive_steering.selector_temperature must be between 0 and 2"
+        )
+    for key, default, lower_bound in (
+        ("selector_max_new_tokens", 256, 1),
+        ("selector_repair_attempts", 1, 0),
+        ("selector_concurrency", 4, 1),
+        ("generation_concurrency", 4, 1),
+    ):
+        value = adaptive.get(key, default)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < lower_bound
+        ):
+            qualifier = "non-negative" if lower_bound == 0 else "positive"
+            raise ConfigError(f"adaptive_steering.{key} must be a {qualifier} integer")
+    weight_min = adaptive.get("weight_min", 0.0)
+    weight_max = adaptive.get("weight_max", 1.0)
+    weight_quantum = adaptive.get("weight_quantum", 0.05)
+    for key, value in (
+        ("weight_min", weight_min),
+        ("weight_max", weight_max),
+        ("weight_quantum", weight_quantum),
+    ):
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+        ):
+            raise ConfigError(f"adaptive_steering.{key} must be finite and numeric")
+    if (
+        float(weight_min) < 0
+        or float(weight_max) > 1
+        or float(weight_min) >= float(weight_max)
+    ):
+        raise ConfigError(
+            "adaptive_steering weights must satisfy 0 <= weight_min < weight_max <= 1"
+        )
+    if not 0 < float(weight_quantum) <= float(weight_max) - float(weight_min):
+        raise ConfigError(
+            "adaptive_steering.weight_quantum must be positive and no larger than the weight range"
+        )
+    if adaptive.get("composition", "weighted_sum") not in {
+        "weighted_sum",
+        "weighted_mean",
+    }:
+        raise ConfigError(
+            "adaptive_steering.composition must be weighted_sum or weighted_mean"
+        )
+    for key, default in (("global_scale", 1.0), ("norm_warning_ratio", 2.0)):
+        value = adaptive.get(key, default)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0
+        ):
+            raise ConfigError(f"adaptive_steering.{key} must be positive and finite")
+    if not isinstance(adaptive.get("include_baseline", True), bool):
+        raise ConfigError("adaptive_steering.include_baseline must be boolean")

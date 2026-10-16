@@ -40,6 +40,9 @@ absolute image paths.
 05 run steered generation through Transformers or vLLM-Hook
   ↓
 06 require a complete paired population, then score accuracy and flips
+
+07 optional main experiment: route six capability weights, compose one vector,
+   then run paired baseline/adaptive inference through vLLM-Hook
 ```
 
 Run from this directory:
@@ -55,6 +58,20 @@ python scripts/04_analyze_vectors.py
 python scripts/05_run_steering.py
 python scripts/06_score_generations.py
 ```
+
+The two-round adaptive main experiment is a separate Stage 07 entry point:
+
+```bash
+python scripts/07_run_adaptive_steering.py \
+  --override experiment.generation.backend=vllm_hook \
+  --override experiment.vllm_hook.protocol=vllm_hook_v0_2
+```
+
+Start with `--eval-limit 1`. Round 1 selects six independent `[0,1]` capability
+weights at temperature `0.6`; Round 2 composes the corresponding Stage 03 vectors
+and performs deterministic paired baseline/adaptive generation. See
+[docs/adaptive_two_round_steering_design_zh.md](docs/adaptive_two_round_steering_design_zh.md)
+for the prompt contract, configuration, outputs, resumption behavior, and metrics.
 
 For a stage-by-stage Chinese operations guide, including inputs, outputs, smoke tests,
 resume behavior, and acceptance checks, see

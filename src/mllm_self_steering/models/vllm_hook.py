@@ -83,7 +83,8 @@ def build_vllm_messages(
     prompt: str,
     image_paths: Sequence[str],
     *,
-    answer_type: str,
+    answer_type: str | None,
+    system_prompt: str | None = None,
     media_transport: str,
     local_media_root: Path,
     server_media_root: str | None,
@@ -109,6 +110,9 @@ def build_vllm_messages(
         )
     else:
         raise ValueError(f"unsupported media transport: {media_transport}")
+    kwargs: dict[str, Any] = {}
+    if system_prompt is not None:
+        kwargs["system_prompt"] = system_prompt
     return build_messages(
         prompt,
         image_paths,
@@ -116,6 +120,7 @@ def build_vllm_messages(
         openai_format=True,
         openai_media_urls=urls,
         openai_media_uuids=media_uuids,
+        **kwargs,
     )
 
 
@@ -199,6 +204,8 @@ class AsyncVLLMHookClient:
         phase: str,
         positions: str,
         max_new_tokens: int,
+        temperature: float = 0.0,
+        seed: int | None = None,
     ) -> str:
         extra_body: dict[str, Any] = {}
         if vector_path is not None and float(alpha) != 0.0:
@@ -211,12 +218,17 @@ class AsyncVLLMHookClient:
                 positions=positions,
             )
             extra_body = {"vllm_xargs": {"steer": json.dumps(steer)}}
+        request: dict[str, Any] = {
+            "model": self._model_name,
+            "messages": messages,
+            "max_tokens": int(max_new_tokens),
+            "temperature": float(temperature),
+            "extra_body": extra_body,
+        }
+        if seed is not None:
+            request["seed"] = int(seed)
         response = await self._client.chat.completions.create(
-            model=self._model_name,
-            messages=messages,
-            max_tokens=int(max_new_tokens),
-            temperature=0.0,
-            extra_body=extra_body,
+            **request,
         )
         content = response.choices[0].message.content
         if not isinstance(content, str):

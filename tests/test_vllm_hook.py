@@ -204,3 +204,44 @@ def test_effect_probe_uses_legacy_payload() -> None:
     steer = json.loads(encoded)
     assert steer["apply_at_all_positions"] is True
     assert "phase" not in steer
+
+
+def test_generate_forwards_selector_temperature_and_seed() -> None:
+    completions = _FakeCompletionsWithContent("{\"weights\":{}}")
+    client = AsyncVLLMHookClient.__new__(AsyncVLLMHookClient)
+    client._client = SimpleNamespace(
+        chat=SimpleNamespace(completions=completions)
+    )
+    client._model_name = "model"
+    client._protocol = "vllm_hook_v0_2"
+
+    output = asyncio.run(
+        client.generate(
+            messages=[],
+            vector_path=None,
+            target_layer=23,
+            alpha=0.0,
+            phase="both",
+            positions="last_token",
+            max_new_tokens=256,
+            temperature=0.6,
+            seed=123,
+        )
+    )
+
+    assert output == "{\"weights\":{}}"
+    assert completions.calls[0]["temperature"] == 0.6
+    assert completions.calls[0]["seed"] == 123
+    assert completions.calls[0]["extra_body"] == {}
+
+
+class _FakeCompletionsWithContent:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.calls: list[dict] = []
+
+    async def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=self.content))]
+        )

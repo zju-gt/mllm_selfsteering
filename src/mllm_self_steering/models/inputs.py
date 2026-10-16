@@ -28,6 +28,7 @@ def build_messages(
     image_paths: Sequence[str],
     *,
     answer_type: str | None = None,
+    system_prompt: str = SYSTEM_PROMPT,
     openai_format: bool = False,
     openai_media_urls: Sequence[str] | None = None,
     openai_media_uuids: Sequence[str] | None = None,
@@ -61,7 +62,7 @@ def build_messages(
             content.append({"type": "image", "image": str(Path(raw_path).resolve())})
     content.append({"type": "text", "text": user_text(prompt, answer_type)})
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": content},
     ]
 

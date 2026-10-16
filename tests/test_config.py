@@ -22,6 +22,8 @@ def test_default_configuration_has_three_plus_three_capabilities() -> None:
     assert sum(row["modality"] == "visual" for row in capabilities.values()) == 3
     assert config["data"]["sources"]["mmstar"]["source_split"] == "val"
     assert config["data"]["sources"]["mmmu"]["source_split"] == "validation"
+    assert config["experiment"]["adaptive_steering"]["selector_temperature"] == 0.6
+    assert config["experiment"]["adaptive_steering"]["composition"] == "weighted_sum"
 
 
 def test_override_changes_backend() -> None:
@@ -109,3 +111,17 @@ def test_legacy_vllm_hook_protocol_rejects_decode_only() -> None:
                 "experiment.vllm_hook.phase=decode",
             ],
         )
+
+
+def test_adaptive_configuration_is_validated() -> None:
+    paths = [
+        ROOT / "configs/model.yaml",
+        ROOT / "configs/data.yaml",
+        ROOT / "configs/experiment.yaml",
+    ]
+    with pytest.raises(ConfigError, match="selector_temperature"):
+        load_config(paths, ["experiment.adaptive_steering.selector_temperature=2.1"])
+    with pytest.raises(ConfigError, match="composition"):
+        load_config(paths, ["experiment.adaptive_steering.composition=unknown"])
+    with pytest.raises(ConfigError, match="weight_quantum"):
+        load_config(paths, ["experiment.adaptive_steering.weight_quantum=0"])

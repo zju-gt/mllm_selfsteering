@@ -61,6 +61,20 @@ experiment:
       vllm_version: null
       mia_revision: null
       served_model_revision: null
+  adaptive_steering:
+    selector_prompt_version: v1
+    selector_temperature: 0.6
+    selector_max_new_tokens: 256
+    selector_repair_attempts: 1
+    weight_min: 0.0
+    weight_max: 1.0
+    weight_quantum: 0.05
+    composition: weighted_sum  # weighted_sum | weighted_mean
+    global_scale: 1.0
+    norm_warning_ratio: 2.0
+    include_baseline: true
+    selector_concurrency: 4
+    generation_concurrency: 4
   paths:
     data_dir: data
     outputs_dir: outputs
