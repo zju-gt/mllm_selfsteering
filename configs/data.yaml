@@ -2,28 +2,28 @@ data:
   cache_dir: .cache/huggingface
   enabled_datasets:
     - mmstar
-    - mmmu
-    - mathvista
-    - mathvision
+    # - mmmu
+    # - mathvista
+    # - mathvision
   sources:
     mmstar:
       path: Lin-Chen/MMStar
       split: test
       source_split: val  # The official public release currently exposes only val.
-      local_path: null
+      local_path: data/processed/mmstar.jsonl
     mmmu:
       path: MMMU/MMMU
       split: val
       source_split: validation
       all_configs: true
-      local_path: null
+      local_path: data/processed/mmmu.jsonl
     mathvista:
       path: AI4Math/MathVista
       split: testmini
       source_split: testmini
-      local_path: null
+      local_path: data/processed/mathvista.jsonl
     mathvision:
       path: MathLLMs/MathVision
       split: test
       source_split: test
-      local_path: null
+      local_path: data/processed/mathvision.jsonl
