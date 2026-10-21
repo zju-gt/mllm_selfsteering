@@ -1,24 +1,24 @@
-export CUDA_VISIBLE_DEVICES=2,3
+export CUDA_VISIBLE_DEVICES=1,2
 
 python scripts/01_validate_pairs.py \
   --pair-limit 128 \
-  --eval-limit 300 \
+  --eval-limit 1500 \
 
 python scripts/02_capture_contrasts.py \
   --pair-limit 128 \
-  --eval-limit 300 \
+  --eval-limit 1500 \
 
 python scripts/03_extract_vectors.py \
   --pair-limit 128 \
-  --eval-limit 300 \
+  --eval-limit 1500 \
 
 python scripts/04_analyze_vectors.py \
   --pair-limit 128 \
-  --eval-limit 300 \
+  --eval-limit 1500 \
 
 # python scripts/05_run_steering.py \
 #   --pair-limit 128 \
-#   --eval-limit 300 \
+#   --eval-limit 1500 \
 #   --override experiment.generation.backend=vllm_hook \
 #   --override experiment.vllm_hook.protocol=vllm_hook_v0_2 \
 #   --override experiment.vllm_hook.base_url=http://127.0.0.1:8770/v1 \
@@ -30,7 +30,7 @@ python scripts/04_analyze_vectors.py \
 
 # python scripts/06_score_generations.py \
 #   --pair-limit 128 \
-#   --eval-limit 300 \
+#   --eval-limit 1500 \
 #   --override experiment.generation.backend=vllm_hook \
 #   --override experiment.vllm_hook.protocol=vllm_hook_v0_2 \
 #   --override experiment.vllm_hook.base_url=http://127.0.0.1:8770/v1 \
@@ -42,7 +42,8 @@ python scripts/04_analyze_vectors.py \
 
 python scripts/07_run_adaptive_steering.py \
   --pair-limit 128 \
-  --eval-limit 300 \
+  --eval-limit 1500 \
+  --baseline-no-answer-only \
   --override experiment.generation.backend=vllm_hook \
   --override experiment.vllm_hook.protocol=vllm_hook_v0_2 \
   --override experiment.vllm_hook.base_url=http://127.0.0.1:8770/v1 \

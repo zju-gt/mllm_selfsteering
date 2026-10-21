@@ -1,10 +1,10 @@
 data:
   cache_dir: .cache/huggingface
   enabled_datasets:
-    - mmstar
-    # - mmmu
-    # - mathvista
-    # - mathvision
+    # - mmstar
+    - mmmu
+    - mathvista
+    - mathvision
   sources:
     mmstar:
       path: Lin-Chen/MMStar
@@ -24,6 +24,6 @@ data:
       local_path: data/processed/mathvista.jsonl
     mathvision:
       path: MathLLMs/MathVision
-      split: test
-      source_split: test
-      local_path: data/processed/mathvision.jsonl
+      split: testmini
+      source_split: testmini
+      local_path: data/processed/mathvision_testmini.jsonl

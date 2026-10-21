@@ -73,6 +73,7 @@ experiment:
     global_scale: 1.0
     norm_warning_ratio: 2.0
     include_baseline: true
+    baseline_no_answer_only: false  # steer only if baseline has no parseable answer
     selector_concurrency: 4
     generation_concurrency: 4
   paths:

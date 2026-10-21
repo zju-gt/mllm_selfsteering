@@ -30,7 +30,7 @@ flowchart LR
     A[原问题与图像] --> B[Round 1: 未编辑模型]
     C[六种能力描述] --> B
     B --> D[严格 JSON 六维权重]
-    D --> E[校验与量化]
+    D --> E[校验、量化与归一化]
     F[六个基础 steering vectors] --> G[加权合成]
     E --> G
     G --> H[Round 2: vLLM-Hook 编辑推理]
@@ -118,7 +118,8 @@ Assign capability weights only. Do not answer the task.
 - 必须包含且仅包含六个已知 key。
 - 每个值必须是有限数值并满足 `0 <= w_i <= 1`。
 - 默认量化到 `0.05`，减少无意义的浮点差异和临时向量数量。
-- 不要求权重和为 1，因为能力可同时需要。
+- 模型原始分数仍可独立给出；量化后若总和大于 0，则每个分数除以总和，
+  保存的 `weights` 之和为 1。若全部为 0，则保持全零，不注入向量。
 - 首次解析失败时进行一次格式修复请求；再次失败则记录错误，不静默补零或截断。
 - 保存原始回复、解析后的权重、重试次数和 prompt 版本，便于审计。
 
@@ -132,11 +133,11 @@ Assign capability weights only. Do not answer the task.
 v_{mix}(x)=\sum_{i=1}^{6} w_i(x)\,v_i
 \]
 
-其中 `v_i` 默认采用 Stage 03 导出的 `steering`（即当前 `mean_norm`）形式。请求发送
-`v_mix` 且 `coefficient=1.0`，等价于分别使用六个系数进行线性相加。
+其中 `w_i` 是量化后按总和归一化的权重，`v_i` 默认采用 Stage 03 导出的
+`steering`（即当前 `mean_norm`）形式。请求发送 `v_mix` 且 `coefficient=1.0`。
 
-第一版建议使用 `weighted_sum`，因为它最忠实地保留“每种能力编辑多少”的语义。考虑到
-多个相关向量相加可能放大范数，实现必须记录：
+当前使用 `weighted_sum`。归一化后，非零权重之和为 1，可避免多个高分直接把合成
+向量放大为数倍。实现仍记录：
 
 - 六个 component weights；
 - 每个基础向量的 norm；
@@ -144,13 +145,15 @@ v_{mix}(x)=\sum_{i=1}^{6} w_i(x)\,v_i
 - `combined_norm / max_component_norm`；
 - 是否超过配置的警告阈值。
 
-默认只警告、不静默重归一化。另提供 `weighted_mean` 作为消融选项：
+另保留 `weighted_mean` 配置选项：
 
 \[
 v_{mix}=\frac{\sum_i w_i v_i}{\max(1,\sum_i w_i)}
 \]
 
-需要在正式实验前确认主结果采用哪一种合成规则。
+在当前归一化规则和 `global_scale=1.0` 下，`weighted_mean` 与 `weighted_sum`
+等价；原始模型分数保存在 `selector_raw_output`，实际合成使用归一化后的 `weights`。
+解析规则变更会生成新的 `run_id`，不会接续旧规则的结果。
 
 ### 4.2 临时向量格式与缓存
 
@@ -260,18 +263,18 @@ outputs/adaptive_metrics/<run_id>.csv
   "item_id": "...",
   "item_identity": "...",
   "weights": {
-    "text_logic": 0.75,
-    "text_quantitative": 0.10,
-    "text_relevance": 0.50,
+    "text_logic": 0.25,
+    "text_quantitative": 0.0,
+    "text_relevance": 0.25,
     "vision_detail": 0.25,
-    "vision_grounding": 0.80,
-    "vision_spatial": 0.30
+    "vision_grounding": 0.25,
+    "vision_spatial": 0.0
   },
   "composition": {
     "mode": "weighted_sum",
     "vector_hash": "...",
-    "combined_norm": 1.23,
-    "norm_ratio": 1.41
+    "combined_norm": 50.55,
+    "norm_ratio": 0.82
   },
   "baseline_raw_output": "...",
   "baseline_predicted_answer": "B",
@@ -331,11 +334,11 @@ python scripts/07_run_adaptive_steering.py \
 必须确认：Round 1 返回合法权重、合成向量可被容器读取、effect probe 通过、Round 2
 产生可解析答案、重复命令能够续跑。
 
-## 10. 已确认的第一版决策
+## 10. 当前决策
 
-1. 主实验使用 `weighted_sum`；`weighted_mean` 保留为配置消融项。
+1. 主实验使用归一化后的 `weighted_sum`；全零权重保持全零。
 2. 默认生成同题配对 `baseline`。
-3. 权重按 `0.05` 量化。
+3. 原始分数先按 `0.05` 量化，再归一化；最终权重不必是 `0.05` 的整数倍。
 4. 权重范围为非负 `[0,1]`。
 5. 入口为 `scripts/07_run_adaptive_steering.py`，selector 温度为 `0.6`。
 

@@ -46,9 +46,16 @@ def test_parse_weights_is_strict_and_quantizes_half_up() -> None:
         quantum=0.05,
     )
 
-    assert parsed["text_logic"] == 0.75
-    assert parsed["text_quantitative"] == 0.15
-    assert parsed["vision_detail"] == 1.0
+    assert parsed["text_logic"] == pytest.approx(0.75 / 1.9)
+    assert parsed["text_quantitative"] == pytest.approx(0.15 / 1.9)
+    assert parsed["vision_detail"] == pytest.approx(1.0 / 1.9)
+    assert sum(parsed.values()) == pytest.approx(1.0)
+
+
+def test_parse_weights_preserves_zero_for_no_steering() -> None:
+    parsed = parse_capability_weights(_response(), list(CAPABILITIES))
+
+    assert parsed == {name: 0.0 for name in CAPABILITIES}
 
 
 @pytest.mark.parametrize(

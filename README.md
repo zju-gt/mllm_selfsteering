@@ -67,11 +67,17 @@ python scripts/07_run_adaptive_steering.py \
   --override experiment.vllm_hook.protocol=vllm_hook_v0_2
 ```
 
-Start with `--eval-limit 1`. Round 1 selects six independent `[0,1]` capability
-weights at temperature `0.6`; Round 2 composes the corresponding Stage 03 vectors
-and performs deterministic paired baseline/adaptive generation. See
+Start with `--eval-limit 1`. Round 1 scores six capabilities independently in
+`[0,1]` at temperature `0.6`, then normalizes nonzero scores to sum to 1.
+All-zero scores remain unsteered. Round 2 composes the corresponding Stage 03
+vectors and performs deterministic paired baseline/adaptive generation. See
 [docs/adaptive_two_round_steering_design_zh.md](docs/adaptive_two_round_steering_design_zh.md)
 for the prompt contract, configuration, outputs, resumption behavior, and metrics.
+
+To steer only when the baseline has no parseable answer, add
+`--baseline-no-answer-only`. This mode checkpoints baseline generations first,
+routes only unanswered items, and uses a separate run ID. The additional
+`adaptive_baselines` output supports resuming an interrupted run.
 
 For a stage-by-stage Chinese operations guide, including inputs, outputs, smoke tests,
 resume behavior, and acceptance checks, see

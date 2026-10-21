@@ -328,3 +328,11 @@ def validate_config(config: dict[str, Any]) -> None:
             raise ConfigError(f"adaptive_steering.{key} must be positive and finite")
     if not isinstance(adaptive.get("include_baseline", True), bool):
         raise ConfigError("adaptive_steering.include_baseline must be boolean")
+    if not isinstance(adaptive.get("baseline_no_answer_only", False), bool):
+        raise ConfigError("adaptive_steering.baseline_no_answer_only must be boolean")
+    if adaptive.get("baseline_no_answer_only", False) and not adaptive.get(
+        "include_baseline", True
+    ):
+        raise ConfigError(
+            "adaptive_steering.baseline_no_answer_only requires include_baseline=true"
+        )

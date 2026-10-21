@@ -9,9 +9,17 @@ import re
 def extract_answer(text: str, answer_type: str) -> str | None:
     if not text or not text.strip():
         return None
+    # Models often wrap the whole final-answer line or its value in Markdown
+    # emphasis. Strip that presentation layer before applying the strict
+    # answer patterns below.
+    text = re.sub(
+        r"(?im)^\s*\*\*\s*(final\s+answer\s*:.*?)\s*\*\*\s*$",
+        r"\1",
+        text,
+    )
     if answer_type == "choice":
         matches = re.findall(
-            r"(?im)final\s+answer\s*:\s*(?:option\s*)?\(?([A-Z])\)?\s*[.)]?\s*$",
+            r"(?im)(?:\*\*)?final\s+answer\s*:\s*(?:option\s*)?(?:\*\*)?\(?([A-Z])\)?\s*[.)]?(?:\*\*)?\s*$",
             text,
         )
         if matches:
@@ -20,7 +28,7 @@ def extract_answer(text: str, answer_type: str) -> str | None:
         return terminal.group(1).upper() if terminal else None
     matches = re.findall(r"(?im)final\s+answer\s*:\s*(.+?)\s*$", text)
     if matches:
-        return matches[-1].strip().rstrip(".")
+        return matches[-1].strip().strip("*").strip().rstrip(".")
     boxed = re.findall(r"\\boxed\{([^{}]+)\}", text)
     if boxed:
         return boxed[-1].strip()

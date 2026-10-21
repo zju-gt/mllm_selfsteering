@@ -113,7 +113,7 @@ def parse_capability_weights(
     weight_max: float = 1.0,
     quantum: float = 0.05,
 ) -> dict[str, float]:
-    """Strictly parse, validate, and quantize a selector JSON response."""
+    """Validate and quantize selector scores, then normalize nonzero weights."""
 
     try:
         payload = json.loads(text.strip(), parse_constant=_reject_json_constant)
@@ -152,7 +152,10 @@ def parse_capability_weights(
         quantized = minimum + steps * step
         quantized = min(maximum, max(minimum, quantized))
         result[capability] = float(quantized)
-    return result
+    total = sum(result.values())
+    if total == 0.0:
+        return result
+    return {capability: weight / total for capability, weight in result.items()}
 
 
 def compose_capability_vectors(
@@ -289,8 +292,10 @@ def _adaptive_run_id(
             "include_baseline",
         )
     }
+    if adaptive.get("baseline_no_answer_only", False):
+        semantic_adaptive["baseline_no_answer_only"] = True
     identity = {
-        "contract": "adaptive-capability-steering-v1",
+        "contract": "adaptive-capability-steering-v2-normalized-weights",
         "capture_id": capture_id,
         "vector_fingerprints": dict(sorted(vector_fingerprints.items())),
         "model": config["model"].get("name"),
@@ -407,6 +412,7 @@ def _write_metrics(
     *,
     capabilities: Sequence[str],
     include_baseline: bool,
+    baseline_no_answer_only: bool,
     expected_items: int,
     json_path: Path,
     csv_path: Path,
@@ -490,6 +496,25 @@ def _write_metrics(
             "max": max(norm_ratios) if norm_ratios else None,
         },
     }
+    if baseline_no_answer_only:
+        report["baseline_no_answer_gate"] = {
+            "unparseable_baselines": sum(
+                row.get("baseline_predicted_answer") is None for row in rows
+            ),
+            "steered_items": sum(
+                bool(row.get("steering_applied")) for row in rows
+            ),
+            "reused_baselines": sum(
+                row.get("baseline_predicted_answer") is not None for row in rows
+            ),
+            "rescued_items": sum(
+                row.get("baseline_predicted_answer") is None and bool(row["correct"])
+                for row in rows
+            ),
+            "selector_requests": sum(
+                int(row.get("selector_attempts", 0)) for row in selections
+            ),
+        }
     atomic_save_json(json_path, report)
 
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -560,6 +585,7 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
         )
 
     selection_path = outputs / "adaptive_selections" / f"{run_id}.jsonl"
+    baseline_path = outputs / "adaptive_baselines" / f"{run_id}.jsonl"
     generation_path = outputs / "adaptive_generations" / f"{run_id}.jsonl"
     metrics_json = outputs / "adaptive_metrics" / f"{run_id}.json"
     metrics_csv = outputs / "adaptive_metrics" / f"{run_id}.csv"
@@ -572,8 +598,16 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
     generation_latest = _canonical_rows(
         generation_path, run_id, successful_only=False
     )
+    baseline_success = (
+        _canonical_rows(baseline_path, run_id, successful_only=True)
+        if adaptive.get("baseline_no_answer_only", False)
+        else {}
+    )
 
     include_baseline = bool(adaptive.get("include_baseline", True))
+    baseline_no_answer_only = bool(adaptive.get("baseline_no_answer_only", False))
+    if baseline_no_answer_only and not include_baseline:
+        raise ValueError("baseline_no_answer_only requires include_baseline=true")
     composition_mode = str(adaptive.get("composition", "weighted_sum"))
     global_scale = float(adaptive.get("global_scale", 1.0))
     warning_ratio = float(adaptive.get("norm_warning_ratio", 2.0))
@@ -593,10 +627,97 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
         )
         try:
             await client.preflight()
+            if baseline_no_answer_only:
+                missing_baselines = [
+                    record
+                    for record in item_records
+                    if (record[0].dataset, record[2]) not in baseline_success
+                ]
+                baseline_progress = tqdm(
+                    total=len(item_records),
+                    initial=len(item_records) - len(missing_baselines),
+                    desc=f"{run_id}:baseline",
+                )
+
+                async def baseline_one(
+                    record: tuple[MultimodalItem, list[str], str],
+                ) -> dict[str, Any]:
+                    item, image_hashes, identity = record
+                    base = {
+                        "run_id": run_id,
+                        "dataset": item.dataset,
+                        "item_id": item.item_id,
+                        "item_identity": identity,
+                    }
+                    try:
+                        messages = build_vllm_messages(
+                            item.prompt,
+                            item.image_paths,
+                            answer_type=item.answer_type,
+                            media_transport=str(vllm.get("media_transport", "file")),
+                            local_media_root=data_dir,
+                            server_media_root=vllm.get("server_media_root"),
+                            media_uuids=image_hashes,
+                        )
+                        output = await client.generate(
+                            messages=messages,
+                            vector_path=None,
+                            target_layer=int(config["experiment"]["target_layer"]),
+                            alpha=0.0,
+                            phase=str(vllm.get("phase", "both")),
+                            positions=str(vllm.get("positions", "last_token")),
+                            max_new_tokens=int(config["model"].get("max_new_tokens", 2048)),
+                            temperature=0.0,
+                            seed=_item_seed(base_seed, identity),
+                        )
+                        parsed = _answer_fields(output, item)
+                        return {
+                            **base,
+                            "baseline_raw_output": parsed["raw_output"],
+                            "baseline_predicted_answer": parsed["predicted_answer"],
+                            "baseline_correct": parsed["correct"],
+                            "status": "ok",
+                        }
+                    except Exception as error:
+                        return {
+                            **base,
+                            "status": "error",
+                            "error_type": type(error).__name__,
+                            "error": repr(error),
+                        }
+
+                try:
+                    with JsonlCheckpointWriter(
+                        baseline_path, sync_every=checkpoint_rows
+                    ) as baseline_writer:
+                        await _run_batched(
+                            missing_baselines,
+                            concurrency=int(adaptive.get("generation_concurrency", 4)),
+                            worker=baseline_one,
+                            writer=baseline_writer,
+                            progress=baseline_progress,
+                            consecutive_error_limit=int(
+                                vllm.get("consecutive_error_limit", 5)
+                            ),
+                            on_success=lambda row: baseline_success.__setitem__(
+                                (str(row["dataset"]), str(row["item_identity"])), row
+                            ),
+                        )
+                finally:
+                    baseline_progress.close()
+                if len(baseline_success) < len(item_records):
+                    raise RuntimeError("baseline generation is incomplete")
+
             incomplete_generation = [
                 record
                 for record in item_records
                 if (record[0].dataset, record[2]) not in generation_success
+                and (
+                    not baseline_no_answer_only
+                    or baseline_success[
+                        (record[0].dataset, record[2])
+                    ]["baseline_predicted_answer"] is None
+                )
             ]
             if incomplete_generation and bool(vllm.get("verify_steering_effect", True)):
                 probe_item, probe_hashes, _ = incomplete_generation[0]
@@ -630,6 +751,12 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
                 record
                 for record in item_records
                 if (record[0].dataset, record[2]) not in selection_success
+                and (
+                    not baseline_no_answer_only
+                    or baseline_success[
+                        (record[0].dataset, record[2])
+                    ]["baseline_predicted_answer"] is None
+                )
             ]
             selection_progress = tqdm(
                 total=len(item_records),
@@ -754,7 +881,15 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
                 record
                 for record in item_records
                 if (record[0].dataset, record[2]) not in generation_success
-                and (record[0].dataset, record[2]) in selection_success
+                and (
+                    (record[0].dataset, record[2]) in selection_success
+                    or (
+                        baseline_no_answer_only
+                        and baseline_success[
+                            (record[0].dataset, record[2])
+                        ]["baseline_predicted_answer"] is not None
+                    )
+                )
             ]
             generation_progress = tqdm(
                 total=len(item_records),
@@ -767,11 +902,20 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
             ) -> dict[str, Any]:
                 item, image_hashes, identity = record
                 key = (item.dataset, identity)
-                selection = selection_success[key]
-                weights = {
-                    capability: float(selection["weights"][capability])
-                    for capability in capabilities
-                }
+                selection = selection_success.get(key)
+                if selection is None and not (
+                    baseline_no_answer_only
+                    and baseline_success[key]["baseline_predicted_answer"] is not None
+                ):
+                    raise RuntimeError(f"missing selector result for {item.item_id}")
+                weights = (
+                    {
+                        capability: float(selection["weights"][capability])
+                        for capability in capabilities
+                    }
+                    if selection is not None
+                    else {capability: 0.0 for capability in capabilities}
+                )
                 vector_key = adaptive_vector_key(
                     weights,
                     vector_fingerprints,
@@ -820,10 +964,15 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
                     "vllm_hook_protocol": str(vllm.get("protocol", "mia")),
                     "vector_scaling": scaling,
                     "weights": weights,
-                    "selector_raw_output": selection["selector_raw_output"],
-                    "selector_attempts": selection["selector_attempts"],
+                    "selector_raw_output": (
+                        selection["selector_raw_output"] if selection is not None else None
+                    ),
+                    "selector_attempts": (
+                        selection["selector_attempts"] if selection is not None else 0
+                    ),
                     "selector_prompt_version": prompt_version,
                     "composition": composition,
+                    "steering_applied": server_vector is not None,
                 }
                 messages = build_vllm_messages(
                     item.prompt,
@@ -837,11 +986,22 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
                 baseline_fields: dict[str, Any] = {}
                 try:
                     baseline_output: str | None = None
-                    partial = generation_latest.get(key)
-                    if include_baseline and partial is not None:
-                        cached = partial.get("baseline_raw_output")
-                        if isinstance(cached, str) and cached:
-                            baseline_output = cached
+                    if baseline_no_answer_only:
+                        baseline_fields = {
+                            name: baseline_success[key][name]
+                            for name in (
+                                "baseline_raw_output",
+                                "baseline_predicted_answer",
+                                "baseline_correct",
+                            )
+                        }
+                        baseline_output = baseline_fields["baseline_raw_output"]
+                    else:
+                        partial = generation_latest.get(key)
+                        if include_baseline and partial is not None:
+                            cached = partial.get("baseline_raw_output")
+                            if isinstance(cached, str) and cached:
+                                baseline_output = cached
                     if include_baseline and baseline_output is None:
                         baseline_output = await client.generate(
                             messages=messages,
@@ -854,7 +1014,7 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
                             temperature=0.0,
                             seed=_item_seed(base_seed, identity),
                         )
-                    if baseline_output is not None:
+                    if baseline_output is not None and not baseline_no_answer_only:
                         parsed = _answer_fields(baseline_output, item)
                         baseline_fields = {
                             "baseline_raw_output": parsed["raw_output"],
@@ -927,6 +1087,7 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
         list(selection_latest.values()),
         capabilities=capabilities,
         include_baseline=include_baseline,
+        baseline_no_answer_only=baseline_no_answer_only,
         expected_items=len(item_records),
         json_path=metrics_json,
         csv_path=metrics_csv,
@@ -937,5 +1098,7 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
         "metrics_json": metrics_json,
         "metrics_csv": metrics_csv,
     }
+    if baseline_no_answer_only:
+        artifacts["baselines"] = baseline_path
     _write_stage_manifest(config, outputs, "07_run_adaptive_steering", artifacts)
     return artifacts

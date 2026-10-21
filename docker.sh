@@ -5,7 +5,7 @@ PROJECT_ROOT=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering
 MODEL_DIR=/sda/llm_weights/Qwen3-VL-8B-Instruct
 HF_CACHE_DIR=/sdb/duyuetian/.cache/huggingface
 
-GPU_IDS="${GPU_IDS:-2,3}"
+GPU_IDS="${GPU_IDS:-1,2}"
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
 PROXY_PORT="${PROXY_PORT:-27890}"
 
