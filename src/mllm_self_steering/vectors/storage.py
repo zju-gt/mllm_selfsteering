@@ -63,12 +63,18 @@ def export_vllm_hook(
         result[capability] = {}
         for form in FORMS:
             destination = root / f"{capability}__{form}.pt"
-            temporary = destination.with_name(f".{destination.name}.{uuid.uuid4().hex}.tmp")
+            # PyTorch's ZIP container embeds the output basename.  Keep that basename
+            # stable and randomize only the temporary directory so identical tensors
+            # produce identical files across preparation runs.
+            temporary_root = root / f".tmp-{uuid.uuid4().hex}"
+            temporary_root.mkdir()
+            temporary = temporary_root / destination.name
             try:
                 torch.save({"dir": forms[form].detach().cpu().float()}, temporary)
                 os.replace(temporary, destination)
             finally:
                 temporary.unlink(missing_ok=True)
+                temporary_root.rmdir()
             result[capability][form] = str(destination.resolve())
     return result
 

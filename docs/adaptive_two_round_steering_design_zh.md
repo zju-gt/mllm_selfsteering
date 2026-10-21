@@ -2,7 +2,7 @@
 
 状态：**已实现。**
 
-入口：`scripts/07_run_adaptive_steering.py`。现有
+入口：`scripts/prepare_experiment.py` 与 `scripts/07_run_adaptive_steering.py`。现有
 `scripts/05_run_steering.py` 保留为固定 capability × alpha 网格基线，不改变其语义。
 
 ## 1. 实验目标
@@ -111,7 +111,7 @@ Assign capability weights only. Do not answer the task.
 ```
 
 实际实现从 `configs/experiment.yaml` 读取能力描述，不在代码中维护第二份定义；prompt
-模板有显式版本号和哈希，进入 `run_id`。
+模板有显式版本号和哈希，进入生成目录的实验指纹。
 
 ### 3.3 输出约束
 
@@ -153,7 +153,7 @@ v_{mix}=\frac{\sum_i w_i v_i}{\max(1,\sum_i w_i)}
 
 在当前归一化规则和 `global_scale=1.0` 下，`weighted_mean` 与 `weighted_sum`
 等价；原始模型分数保存在 `selector_raw_output`，实际合成使用归一化后的 `weights`。
-解析规则变更会生成新的 `run_id`，不会接续旧规则的结果。
+解析规则变更会导致实验指纹不匹配，不允许接续旧规则的生成目录。
 
 ### 4.2 临时向量格式与缓存
 
@@ -205,8 +205,10 @@ baseline：同一问题使用相同生成参数，但不加向量。
 已实现文件：
 
 ```text
-scripts/07_run_adaptive_steering.py       # 唯一用户入口
+scripts/prepare_experiment.py             # 创建冻结的准备目录
+scripts/07_run_adaptive_steering.py       # 新建或续跑生成目录
 src/mllm_self_steering/adaptive.py        # prompt、解析、合成、两轮调度
+src/mllm_self_steering/runs.py            # 运行目录与 config.json 校验
 src/mllm_self_steering/models/vllm_hook.py# 增加无 steering 的结构化路由请求
 configs/experiment.yaml                   # adaptive_steering 配置段
 tests/test_adaptive.py                    # 纯 CPU 单元测试
@@ -235,7 +237,8 @@ experiment:
     generation_concurrency: 4
 ```
 
-并发参数不进入实验身份；prompt、量化、合成规则、向量指纹和生成参数进入 `run_id`。
+并发参数不进入实验指纹；prompt、量化、合成规则、向量内容指纹和生成参数进入
+`config.json` 的 `experiment_fingerprint`。
 
 ## 7. 调度、断点恢复与输出
 
@@ -244,13 +247,23 @@ experiment:
 1. 并发完成所有未完成样本的 Round 1，并实时 checkpoint；
 2. 对有效权重生成/复用合成向量，再并发执行 baseline 和 Round 2。
 
-建议输出：
+输出按准备与生成两类目录隔离：
 
 ```text
-outputs/adaptive_selections/<run_id>.jsonl
-outputs/adaptive_generations/<run_id>.jsonl
-outputs/adaptive_metrics/<run_id>.json
-outputs/adaptive_metrics/<run_id>.csv
+outputs/preparation_1021_1654/
+  config.json
+  activations/
+  vectors/
+  metrics/
+
+outputs/generation_1021_1730/
+  config.json
+  baselines.jsonl
+  selections.jsonl
+  generations.jsonl
+  adaptive_vectors/
+  metrics.json
+  metrics.csv
 ```
 
 每个 generation row 至少包含：
@@ -286,8 +299,9 @@ outputs/adaptive_metrics/<run_id>.csv
 }
 ```
 
-相同命令产生相同 `run_id`。重新运行时跳过已成功的 selector 和 generation，只重试失败
-或缺失项。
+不传 `--generation-dir` 时始终新建时间戳目录；传入已有目录时才进入续跑模式。续跑先校验
+`config.json` 中的准备目录指纹、向量库、数据和语义参数，然后跳过已有的成功 baseline、
+selector 和 generation，只重试失败或缺失项。并发数不影响续跑兼容性。
 
 ## 8. 指标
 
@@ -318,13 +332,14 @@ outputs/adaptive_metrics/<run_id>.csv
 - 全零向量旁路；
 - 缓存 hash 稳定；
 - 本地路径到容器路径映射；
-- run ID 对语义参数敏感、对并发参数不敏感；
+- 实验指纹对语义参数敏感、对并发参数不敏感；
 - checkpoint 后断点续跑不重复成功请求。
 
 服务器冒烟验收：
 
 ```bash
 python scripts/07_run_adaptive_steering.py \
+  --preparation-dir outputs/preparation_1021_1654 \
   --eval-limit 1 \
   --override 'data.enabled_datasets=[mmstar]' \
   --override experiment.generation.backend=vllm_hook \
@@ -342,5 +357,5 @@ python scripts/07_run_adaptive_steering.py \
 4. 权重范围为非负 `[0,1]`。
 5. 入口为 `scripts/07_run_adaptive_steering.py`，selector 温度为 `0.6`。
 
-Stage 03 向量与 vLLM-Hook 服务准备好后，可先运行单样本冒烟测试，再移除
-`--eval-limit 1` 执行正式实验。脚本会按 `run_id` 自动续跑，不需要删除已有 JSONL。
+准备目录与 vLLM-Hook 服务准备好后，可先新建一个单样本生成目录做冒烟测试。正式实验不传
+`--generation-dir` 以创建新目录；中断后传回同一个生成目录即可续跑，不需要删除 JSONL。

@@ -3,6 +3,13 @@
 本文档说明 `scripts/` 下各阶段脚本的功能、输入、输出、关键配置和验收方法。
 所有命令都应在仓库根目录执行。
 
+> 自适应主实验现在推荐使用显式运行目录：先用
+> `python scripts/prepare_experiment.py --pair-limit N` 创建
+> `outputs/preparation_MMDD_HHMM/`，再把该目录传给
+> `scripts/07_run_adaptive_steering.py --preparation-dir ...`。不传
+> `--generation-dir` 会新建 `outputs/generation_MMDD_HHMM/`；传入已有生成目录才会断点续跑。
+> 两类目录均保存 `config.json`，下述旧版 01–06 分阶段命令仍保留。
+
 ## 1. 流水线总览
 
 ```text

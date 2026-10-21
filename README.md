@@ -59,13 +59,44 @@ python scripts/05_run_steering.py
 python scripts/06_score_generations.py
 ```
 
-The two-round adaptive main experiment is a separate Stage 07 entry point:
+The adaptive main experiment uses separate, immutable preparation and resumable
+generation directories:
 
 ```bash
+python scripts/prepare_experiment.py --pair-limit 128
+
 python scripts/07_run_adaptive_steering.py \
+  --preparation-dir outputs/preparation_1021_1654 \
   --override experiment.generation.backend=vllm_hook \
   --override experiment.vllm_hook.protocol=vllm_hook_v0_2
 ```
+
+Omitting `--generation-dir` always creates a new `outputs/generation_MMDD_HHMM`
+directory. Pass an existing directory to resume it:
+
+```bash
+python scripts/07_run_adaptive_steering.py \
+  --preparation-dir outputs/preparation_1021_1654 \
+  --generation-dir outputs/generation_1021_1730 \
+  --override experiment.generation.backend=vllm_hook \
+  --override experiment.vllm_hook.protocol=vllm_hook_v0_2
+```
+
+Both directories contain a `config.json` snapshot. Resume validates the preparation,
+semantic generation settings, evaluation data, and tensor-content vector fingerprints
+before reusing checkpoints. Operational concurrency may be changed while resuming.
+
+The repository helper exposes the same lifecycle explicitly:
+
+```bash
+bash wyc.sh prepare
+bash wyc.sh generate outputs/preparation_1021_1654
+bash wyc.sh generate outputs/preparation_1021_1654 outputs/generation_1021_1730
+```
+
+The second command starts a new generation; the third resumes the named generation.
+Existing pre-refactor outputs can still use `--legacy-layout`; it preserves the old
+file-hash/run-ID behavior and must not be combined with either directory option.
 
 Start with `--eval-limit 1`. Round 1 scores six capabilities independently in
 `[0,1]` at temperature `0.6`, then normalizes nonzero scores to sum to 1.
@@ -75,9 +106,9 @@ vectors and performs deterministic paired baseline/adaptive generation. See
 for the prompt contract, configuration, outputs, resumption behavior, and metrics.
 
 To steer only when the baseline has no parseable answer, add
-`--baseline-no-answer-only`. This mode checkpoints baseline generations first,
-routes only unanswered items, and uses a separate run ID. The additional
-`adaptive_baselines` output supports resuming an interrupted run.
+`--baseline-no-answer-only`. This mode checkpoints `baselines.jsonl` first and routes
+only unanswered items. `selections.jsonl` and `generations.jsonl` are checkpointed in
+the same generation directory.
 
 For a stage-by-stage Chinese operations guide, including inputs, outputs, smoke tests,
 resume behavior, and acceptance checks, see

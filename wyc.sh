@@ -1,55 +1,54 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
 export CUDA_VISIBLE_DEVICES=1,2
 
-python scripts/01_validate_pairs.py \
-  --pair-limit 128 \
-  --eval-limit 1500 \
+MODE="${1:-}"
 
-python scripts/02_capture_contrasts.py \
-  --pair-limit 128 \
-  --eval-limit 1500 \
+case "$MODE" in
+  prepare)
+    PREPARATION_ARGS=()
+    if [ -n "${2:-}" ]; then
+      PREPARATION_ARGS+=(--preparation-dir "$2")
+    fi
+    python scripts/prepare_experiment.py \
+      --pair-limit 128 \
+      "${PREPARATION_ARGS[@]}"
+    ;;
 
-python scripts/03_extract_vectors.py \
-  --pair-limit 128 \
-  --eval-limit 1500 \
+  generate)
+    if [ -z "${2:-}" ]; then
+      echo "Usage: bash wyc.sh generate <preparation-dir> [generation-dir]" >&2
+      exit 2
+    fi
+    GENERATION_ARGS=(--preparation-dir "$2")
+    if [ -n "${3:-}" ]; then
+      GENERATION_ARGS+=(--generation-dir "$3")
+    fi
+    python scripts/07_run_adaptive_steering.py \
+      --eval-limit 1500 \
+      --baseline-no-answer-only \
+      "${GENERATION_ARGS[@]}" \
+      --override experiment.generation.backend=vllm_hook \
+      --override experiment.vllm_hook.protocol=vllm_hook_v0_2 \
+      --override experiment.vllm_hook.base_url=http://127.0.0.1:8770/v1 \
+      --override experiment.vllm_hook.server_media_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/data \
+      --override experiment.vllm_hook.server_vector_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/outputs/vectors \
+      --override experiment.vllm_hook.server_provenance.vllm_version=0.12.0 \
+      --override experiment.vllm_hook.server_provenance.mia_revision=0e34fddf2c234a50c9c820c2b7852472f8f4c51c \
+      --override experiment.adaptive_steering.selector_concurrency=8 \
+      --override experiment.adaptive_steering.generation_concurrency=8
+    ;;
 
-python scripts/04_analyze_vectors.py \
-  --pair-limit 128 \
-  --eval-limit 1500 \
+  *)
+    cat >&2 <<'EOF'
+Usage:
+  bash wyc.sh prepare [preparation-dir]
+  bash wyc.sh generate <preparation-dir> [generation-dir]
 
-# python scripts/05_run_steering.py \
-#   --pair-limit 128 \
-#   --eval-limit 1500 \
-#   --override experiment.generation.backend=vllm_hook \
-#   --override experiment.vllm_hook.protocol=vllm_hook_v0_2 \
-#   --override experiment.vllm_hook.base_url=http://127.0.0.1:8770/v1 \
-#   --override experiment.vllm_hook.request_concurrency=1 \
-#   --override experiment.vllm_hook.server_media_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/data \
-#   --override experiment.vllm_hook.server_vector_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/outputs/vectors \
-#   --override experiment.vllm_hook.server_provenance.vllm_version=0.12.0 \
-#   --override experiment.vllm_hook.server_provenance.mia_revision=0e34fddf2c234a50c9c820c2b7852472f8f4c51c
-
-# python scripts/06_score_generations.py \
-#   --pair-limit 128 \
-#   --eval-limit 1500 \
-#   --override experiment.generation.backend=vllm_hook \
-#   --override experiment.vllm_hook.protocol=vllm_hook_v0_2 \
-#   --override experiment.vllm_hook.base_url=http://127.0.0.1:8770/v1 \
-#   --override experiment.vllm_hook.request_concurrency=1 \
-#   --override experiment.vllm_hook.server_media_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/data \
-#   --override experiment.vllm_hook.server_vector_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/outputs/vectors \
-#   --override experiment.vllm_hook.server_provenance.vllm_version=0.12.0 \
-#   --override experiment.vllm_hook.server_provenance.mia_revision=0e34fddf2c234a50c9c820c2b7852472f8f4c51c
-
-python scripts/07_run_adaptive_steering.py \
-  --pair-limit 128 \
-  --eval-limit 1500 \
-  --baseline-no-answer-only \
-  --override experiment.generation.backend=vllm_hook \
-  --override experiment.vllm_hook.protocol=vllm_hook_v0_2 \
-  --override experiment.vllm_hook.base_url=http://127.0.0.1:8770/v1 \
-  --override experiment.vllm_hook.server_media_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/data \
-  --override experiment.vllm_hook.server_vector_root=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering/outputs/vectors \
-  --override experiment.vllm_hook.server_provenance.vllm_version=0.12.0 \
-  --override experiment.vllm_hook.server_provenance.mia_revision=0e34fddf2c234a50c9c820c2b7852472f8f4c51c \
-  --override experiment.adaptive_steering.selector_concurrency=8 \
-  --override experiment.adaptive_steering.generation_concurrency=8
+Omit generation-dir to start a new timestamped generation run.
+Pass an existing generation-dir to resume it.
+EOF
+    exit 2
+    ;;
+esac

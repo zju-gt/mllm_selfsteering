@@ -6,6 +6,8 @@ import torch
 
 from mllm_self_steering.adaptive import (
     _server_adaptive_vector_path,
+    _server_run_root,
+    _tensor_fingerprint,
     adaptive_vector_key,
     build_selector_prompts,
     compose_capability_vectors,
@@ -126,6 +128,15 @@ def test_vector_key_is_stable_and_sensitive_to_semantics() -> None:
     assert first != changed
 
 
+def test_tensor_fingerprint_uses_values_not_serialization_container() -> None:
+    first = torch.tensor([1.0, 2.0])
+    same = first.clone()
+    changed = torch.tensor([1.0, 3.0])
+
+    assert _tensor_fingerprint(first) == _tensor_fingerprint(same)
+    assert _tensor_fingerprint(first) != _tensor_fingerprint(changed)
+
+
 def test_adaptive_vector_path_tracks_server_outputs_sibling(tmp_path: Path) -> None:
     outputs = tmp_path / "outputs"
     local = outputs / "adaptive_vectors" / "capture" / "weights.pt"
@@ -135,3 +146,14 @@ def test_adaptive_vector_path_tracks_server_outputs_sibling(tmp_path: Path) -> N
         outputs=outputs,
         server_vector_root="/workspace/project/outputs/vectors",
     ) == "/workspace/project/outputs/adaptive_vectors/capture/weights.pt"
+
+
+def test_run_directory_maps_through_server_outputs_root(tmp_path: Path) -> None:
+    outputs = tmp_path / "outputs"
+    preparation = outputs / "preparation_1021_1654"
+
+    assert _server_run_root(
+        preparation,
+        outputs_root=outputs,
+        server_vector_root="/workspace/project/outputs/vectors",
+    ) == "/workspace/project/outputs/preparation_1021_1654"

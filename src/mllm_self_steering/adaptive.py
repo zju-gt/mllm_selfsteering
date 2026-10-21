@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import csv
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
 import json
 import math
 import os
@@ -32,6 +33,13 @@ from mllm_self_steering.pipeline import (
     _write_stage_manifest,
     capture_artifact_id,
     item_identity,
+)
+from mllm_self_steering.runs import (
+    generation_payload,
+    preparation_vector_root,
+    read_run_config,
+    validate_generation_resume,
+    write_run_config,
 )
 from mllm_self_steering.utils.io import (
     JsonlCheckpointWriter,
@@ -234,18 +242,23 @@ def adaptive_vector_key(
 
 def _atomic_save_vllm_vector(path: Path, vector: torch.Tensor) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
+    temporary_root = path.parent / f".tmp-{uuid.uuid4().hex}"
+    temporary_root.mkdir()
+    temporary = temporary_root / path.name
     try:
         torch.save({"dir": vector.detach().cpu().float()}, temporary)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
+        temporary_root.rmdir()
 
 
 def _load_base_vectors(
     vector_root: Path,
     capabilities: Sequence[str],
     form: str,
+    *,
+    fingerprint_files: bool = False,
 ) -> tuple[dict[str, torch.Tensor], dict[str, Path], dict[str, str]]:
     vectors: dict[str, torch.Tensor] = {}
     paths: dict[str, Path] = {}
@@ -261,8 +274,23 @@ def _load_base_vectors(
             raise ValueError(f"invalid vLLM-Hook vector payload: {path}")
         vectors[capability] = payload["dir"].detach().cpu().float()
         paths[capability] = path
-        fingerprints[capability] = sha256_file(path)
+        fingerprints[capability] = (
+            sha256_file(path)
+            if fingerprint_files
+            else _tensor_fingerprint(vectors[capability])
+        )
     return vectors, paths, fingerprints
+
+
+def _tensor_fingerprint(value: torch.Tensor) -> str:
+    """Hash tensor meaning rather than unstable ``torch.save`` container bytes."""
+
+    tensor = value.detach().cpu().contiguous()
+    digest = hashlib.sha256()
+    digest.update(str(tensor.dtype).encode("ascii"))
+    digest.update(json.dumps(list(tensor.shape), separators=(",", ":")).encode("ascii"))
+    digest.update(tensor.view(torch.uint8).numpy().tobytes())
+    return digest.hexdigest()
 
 
 def _adaptive_run_id(
@@ -272,6 +300,7 @@ def _adaptive_run_id(
     capture_id: str,
     vector_fingerprints: Mapping[str, str],
     prompt_hash: str,
+    contract: str = "adaptive-capability-steering-v3-stable-vector-fingerprints",
 ) -> str:
     data_dir, _ = _paths(config, project_root)
     adaptive = config["experiment"].get("adaptive_steering", {})
@@ -295,7 +324,7 @@ def _adaptive_run_id(
     if adaptive.get("baseline_no_answer_only", False):
         semantic_adaptive["baseline_no_answer_only"] = True
     identity = {
-        "contract": "adaptive-capability-steering-v2-normalized-weights",
+        "contract": contract,
         "capture_id": capture_id,
         "vector_fingerprints": dict(sorted(vector_fingerprints.items())),
         "model": config["model"].get("name"),
@@ -542,33 +571,150 @@ def _write_metrics(
         temporary.unlink(missing_ok=True)
 
 
-def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[str, Path]:
+def _validate_preparation_compatibility(
+    config: Mapping[str, Any], preparation: Mapping[str, Any], preparation_dir: Path
+) -> None:
+    saved = preparation.get("config")
+    if not isinstance(saved, dict):
+        raise ValueError(f"preparation config snapshot is missing: {preparation_dir}")
+    comparisons = {
+        "model.name": (
+            saved.get("model", {}).get("name"),
+            config.get("model", {}).get("name"),
+        ),
+        "model.revision": (
+            saved.get("model", {}).get("revision"),
+            config.get("model", {}).get("revision"),
+        ),
+        "experiment.target_layer": (
+            saved.get("experiment", {}).get("target_layer"),
+            config.get("experiment", {}).get("target_layer"),
+        ),
+        "experiment.capabilities": (
+            saved.get("experiment", {}).get("capabilities"),
+            config.get("experiment", {}).get("capabilities"),
+        ),
+    }
+    mismatches = [name for name, (before, now) in comparisons.items() if before != now]
+    if mismatches:
+        raise ValueError(
+            f"preparation {preparation_dir} is incompatible with the generation config: "
+            + ", ".join(mismatches)
+        )
+
+
+def _server_run_root(
+    run_dir: Path,
+    *,
+    outputs_root: Path,
+    server_vector_root: str | None,
+) -> str | None:
+    """Map a run directory through the legacy ``outputs/vectors`` server root."""
+
+    if server_vector_root is None:
+        return None
+    try:
+        relative = run_dir.resolve().relative_to(outputs_root.resolve())
+    except ValueError as exc:
+        raise ValueError(
+            f"run directory {run_dir} is outside {outputs_root}; either place runs under "
+            "the configured outputs directory or set server_vector_root=null"
+        ) from exc
+    server_outputs = PurePosixPath(server_vector_root).parent
+    return str(server_outputs.joinpath(*relative.parts))
+
+
+def run_adaptive_steering(
+    config: dict[str, Any],
+    project_root: Path,
+    *,
+    preparation_dir: Path | None = None,
+    generation_dir: Path | None = None,
+) -> dict[str, Path]:
     """Run capability selection, vector composition, generation, and metrics."""
 
     if config["experiment"].get("generation", {}).get("backend") != "vllm_hook":
         raise ValueError("adaptive steering requires experiment.generation.backend=vllm_hook")
 
-    data_dir, outputs = _paths(config, project_root)
+    data_dir, configured_outputs = _paths(config, project_root)
+    explicit_run_layout = preparation_dir is not None or generation_dir is not None
+    if explicit_run_layout and (preparation_dir is None or generation_dir is None):
+        raise ValueError("preparation_dir and generation_dir must be provided together")
+
+    preparation: dict[str, Any] | None = None
+    if explicit_run_layout:
+        assert preparation_dir is not None and generation_dir is not None
+        preparation_dir = preparation_dir.resolve()
+        generation_dir = generation_dir.resolve()
+        preparation = read_run_config(preparation_dir, expected_kind="preparation")
+        if preparation.get("status") != "complete":
+            raise ValueError(f"preparation is not complete: {preparation_dir}")
+        _validate_preparation_compatibility(config, preparation, preparation_dir)
+        generation_dir.mkdir(parents=True, exist_ok=True)
+        outputs = generation_dir
+        capture_id = str(preparation["capture_artifact_id"])
+        vector_root = preparation_vector_root(preparation_dir, preparation)
+    else:
+        outputs = configured_outputs
+        capture_id = capture_artifact_id(config, project_root)
+        vector_root = outputs / "vectors" / capture_id
+
     capabilities_by_id = capability_map(config)
     capabilities = list(capabilities_by_id)
     adaptive = config["experiment"].get("adaptive_steering", {})
     vllm = config["experiment"].get("vllm_hook", {})
     scaling = str(config["experiment"]["vector_scaling"])
     form = {"mean_norm": "steering", "raw": "raw", "unit": "unit"}[scaling]
-    capture_id = capture_artifact_id(config, project_root)
-    vector_root = outputs / "vectors" / capture_id
     base_vectors, base_vector_paths, vector_fingerprints = _load_base_vectors(
-        vector_root, capabilities, form
+        vector_root,
+        capabilities,
+        form,
+        fingerprint_files=not explicit_run_layout,
     )
     prompt_version = str(adaptive.get("selector_prompt_version", "v1"))
     prompt_hash = selector_prompt_hash(capabilities_by_id, version=prompt_version)
-    run_id = _adaptive_run_id(
+    experiment_fingerprint = _adaptive_run_id(
         config,
         project_root,
         capture_id=capture_id,
         vector_fingerprints=vector_fingerprints,
         prompt_hash=prompt_hash,
+        contract=(
+            "adaptive-capability-steering-v3-stable-vector-fingerprints"
+            if explicit_run_layout
+            else "adaptive-capability-steering-v2-normalized-weights"
+        ),
     )
+    run_metadata: dict[str, Any] | None = None
+    if explicit_run_layout:
+        assert preparation_dir is not None and generation_dir is not None
+        assert preparation is not None
+        run_id = generation_dir.name
+        expected_metadata = generation_payload(
+            config,
+            generation_dir,
+            preparation_dir,
+            preparation,
+            experiment_fingerprint=experiment_fingerprint,
+            status="running",
+        )
+        metadata_path = generation_dir / "config.json"
+        if metadata_path.is_file():
+            existing = read_run_config(generation_dir, expected_kind="generation")
+            validate_generation_resume(existing, expected_metadata, generation_dir)
+            run_metadata = dict(existing)
+            run_id = str(existing["name"])
+            run_metadata["status"] = "running"
+            run_metadata["config"] = expected_metadata["config"]
+        else:
+            if any(generation_dir.iterdir()):
+                raise ValueError(
+                    f"generation directory is non-empty but has no config.json: {generation_dir}"
+                )
+            run_metadata = expected_metadata
+        write_run_config(generation_dir, run_metadata)
+    else:
+        run_id = experiment_fingerprint
 
     items: list[MultimodalItem] = []
     for dataset in config["data"]["enabled_datasets"]:
@@ -584,11 +730,18 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
             (item, image_hashes, item_identity(item, image_hashes=image_hashes))
         )
 
-    selection_path = outputs / "adaptive_selections" / f"{run_id}.jsonl"
-    baseline_path = outputs / "adaptive_baselines" / f"{run_id}.jsonl"
-    generation_path = outputs / "adaptive_generations" / f"{run_id}.jsonl"
-    metrics_json = outputs / "adaptive_metrics" / f"{run_id}.json"
-    metrics_csv = outputs / "adaptive_metrics" / f"{run_id}.csv"
+    if explicit_run_layout:
+        selection_path = outputs / "selections.jsonl"
+        baseline_path = outputs / "baselines.jsonl"
+        generation_path = outputs / "generations.jsonl"
+        metrics_json = outputs / "metrics.json"
+        metrics_csv = outputs / "metrics.csv"
+    else:
+        selection_path = outputs / "adaptive_selections" / f"{run_id}.jsonl"
+        baseline_path = outputs / "adaptive_baselines" / f"{run_id}.jsonl"
+        generation_path = outputs / "adaptive_generations" / f"{run_id}.jsonl"
+        metrics_json = outputs / "adaptive_metrics" / f"{run_id}.json"
+        metrics_csv = outputs / "adaptive_metrics" / f"{run_id}.csv"
     selection_success = _canonical_rows(
         selection_path, run_id, successful_only=True
     )
@@ -615,6 +768,25 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
     checkpoint_rows = int(
         config["experiment"].get("generation", {}).get("checkpoint_rows", 100)
     )
+    if explicit_run_layout:
+        assert preparation_dir is not None and generation_dir is not None
+        base_local_root = preparation_dir
+        base_server_root = _server_run_root(
+            preparation_dir,
+            outputs_root=configured_outputs,
+            server_vector_root=vllm.get("server_vector_root"),
+        )
+        adaptive_local_root = generation_dir
+        adaptive_server_root = _server_run_root(
+            generation_dir,
+            outputs_root=configured_outputs,
+            server_vector_root=vllm.get("server_vector_root"),
+        )
+    else:
+        base_local_root = outputs / "vectors"
+        base_server_root = vllm.get("server_vector_root")
+        adaptive_local_root = outputs / "adaptive_vectors"
+        adaptive_server_root = None
 
     async def execute() -> None:
         client = AsyncVLLMHookClient(
@@ -733,8 +905,8 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
                 )
                 server_base_vector = map_server_path(
                     base_vector_paths[probe_capability],
-                    local_root=outputs / "vectors",
-                    server_root=vllm.get("server_vector_root"),
+                    local_root=base_local_root,
+                    server_root=base_server_root,
                 )
                 await client.verify_steering_effect(
                     messages=probe_messages,
@@ -946,11 +1118,18 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
                     )
                     if not local_vector.is_file():
                         _atomic_save_vllm_vector(local_vector, mixed)
-                    server_vector = _server_adaptive_vector_path(
-                        local_vector,
-                        outputs=outputs,
-                        server_vector_root=vllm.get("server_vector_root"),
-                    )
+                    if explicit_run_layout:
+                        server_vector = map_server_path(
+                            local_vector,
+                            local_root=adaptive_local_root,
+                            server_root=adaptive_server_root,
+                        )
+                    else:
+                        server_vector = _server_adaptive_vector_path(
+                            local_vector,
+                            outputs=outputs,
+                            server_vector_root=vllm.get("server_vector_root"),
+                        )
 
                 base = {
                     "run_id": run_id,
@@ -1101,4 +1280,7 @@ def run_adaptive_steering(config: dict[str, Any], project_root: Path) -> dict[st
     if baseline_no_answer_only:
         artifacts["baselines"] = baseline_path
     _write_stage_manifest(config, outputs, "07_run_adaptive_steering", artifacts)
+    if run_metadata is not None:
+        run_metadata["status"] = "complete"
+        artifacts["config"] = write_run_config(outputs, run_metadata)
     return artifacts
