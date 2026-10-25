@@ -98,6 +98,23 @@ The second command starts a new generation; the third resumes the named generati
 Existing pre-refactor outputs can still use `--legacy-layout`; it preserves the old
 file-hash/run-ID behavior and must not be combined with either directory option.
 
+For an unsteered base-model-only evaluation, start the standalone vLLM service and
+run the resumable baseline entry point. It does not load a preparation directory or
+any steering vectors:
+
+```bash
+MODEL_DIR=/sda/llm_weights/Qwen3-VL-8B-Instruct bash docker_baseline.sh
+bash baseline.sh
+```
+
+The second command creates `outputs/baseline_MMDD_HHMM/` containing `config.json`,
+`baselines.jsonl`, and `metrics.json`. Resume an interrupted run by passing that
+directory explicitly:
+
+```bash
+bash baseline.sh outputs/baseline_1025_1530
+```
+
 After generation completes, calculate paired baseline/steering metrics and standard
 dataset subdivisions with:
 
