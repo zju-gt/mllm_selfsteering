@@ -26,7 +26,6 @@ case "$MODE" in
       GENERATION_ARGS+=(--generation-dir "$3")
     fi
     python scripts/07_run_adaptive_steering.py \
-      --eval-limit 1500 \
       --baseline-no-answer-only \
       "${GENERATION_ARGS[@]}" \
       --override experiment.generation.backend=vllm_hook \

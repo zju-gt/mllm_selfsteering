@@ -71,6 +71,6 @@ docker run --rm \
     --port 8770 \
     --tensor-parallel-size "${TENSOR_PARALLEL_SIZE}" \
     --max-model-len 16384 \
-    --gpu-memory-utilization 0.8 \
+    --gpu-memory-utilization 0.9 \
     --enforce-eager \
     --allowed-local-media-path "${PROJECT_ROOT}/data"
