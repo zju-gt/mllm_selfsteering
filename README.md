@@ -98,6 +98,17 @@ The second command starts a new generation; the third resumes the named generati
 Existing pre-refactor outputs can still use `--legacy-layout`; it preserves the old
 file-hash/run-ID behavior and must not be combined with either directory option.
 
+After generation completes, calculate paired baseline/steering metrics and standard
+dataset subdivisions with:
+
+```bash
+python scripts/split_metrics.py outputs/generation_1021_1730
+```
+
+This writes `split_metrics.json` inside the generation directory. MathVista and
+MathVision report OE/MC/ALL; MMStar reports Perception/Reasoning/ALL; MMMU reports
+STEM/HASS/ALL. Every group includes accuracies, delta, paired flips, and counts.
+
 Start with `--eval-limit 1`. Round 1 scores six capabilities independently in
 `[0,1]` at temperature `0.6`, then normalizes nonzero scores to sum to 1.
 All-zero scores remain unsteered. Round 2 composes the corresponding Stage 03
