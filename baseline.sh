@@ -2,10 +2,10 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering}"
-MODEL_DIR="${MODEL_DIR:-/sda/llm_weights/Qwen3-VL-8B-Instruct}"
+MODEL_DIR="${MODEL_DIR:-/sdb/duyuetian/models/VLM-CapCurriculum-8B}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_DIR}"
 VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:8770/v1}"
-EVAL_LIMIT="${EVAL_LIMIT:-1500}"
+# EVAL_LIMIT="${EVAL_LIMIT:-1500}"
 REQUEST_CONCURRENCY="${REQUEST_CONCURRENCY:-8}"
 VLLM_VERSION="${VLLM_VERSION:-0.12.0}"
 MODEL_REVISION="${MODEL_REVISION:-main}"
@@ -20,7 +20,6 @@ if [ -n "$DATASETS_YAML" ]; then
 fi
 
 python scripts/run_baseline.py \
-  --eval-limit "$EVAL_LIMIT" \
   "${BASELINE_ARGS[@]}" \
   --override "model.name=${SERVED_MODEL_NAME}" \
   --override "model.source=${MODEL_DIR}" \
