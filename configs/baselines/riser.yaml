@@ -1,0 +1,14 @@
+# Isolated defaults for the RISER fixed-router approximation.
+experiment:
+  generation:
+    backend: vllm_hook
+
+riser_baseline:
+  fixed_router:
+    # Every input receives this same mask and strength vector. Tune this on a
+    # validation split, then freeze it before reporting test-set results.
+    components:
+      text_logic: 1.0
+    alpha_max: 1.0
+  generation_concurrency: 4
+  norm_warning_ratio: 2.0
