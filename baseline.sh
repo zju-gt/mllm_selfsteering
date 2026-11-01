@@ -2,7 +2,7 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering}"
-MODEL_DIR="${MODEL_DIR:-/sdb/duyuetian/models/VLM-CapCurriculum-8B}"
+MODEL_DIR="${MODEL_DIR:-/sda/llm_weights/Qwen3-VL-8B-Instruct}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_DIR}"
 VLLM_BASE_URL="${VLLM_BASE_URL:-http://127.0.0.1:8770/v1}"
 # EVAL_LIMIT="${EVAL_LIMIT:-1500}"

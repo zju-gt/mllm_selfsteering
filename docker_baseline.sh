@@ -2,11 +2,11 @@
 set -euo pipefail
 
 PROJECT_ROOT="${PROJECT_ROOT:-/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering}"
-MODEL_DIR="${MODEL_DIR:-/sdb/duyuetian/models/VLM-CapCurriculum-8B}"
+MODEL_DIR="${MODEL_DIR:-/sda/llm_weights/Qwen3-VL-8B-Instruct}"
 SERVED_MODEL_NAME="${SERVED_MODEL_NAME:-$MODEL_DIR}"
 HF_CACHE_DIR="${HF_CACHE_DIR:-/sdb/duyuetian/.cache/huggingface}"
 
-GPU_IDS="${GPU_IDS:-2}"
+GPU_IDS="${GPU_IDS:-4}"
 TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 PROXY_PORT="${PROXY_PORT:-27890}"
 VLLM_PORT="${VLLM_PORT:-8770}"

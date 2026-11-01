@@ -1,7 +1,7 @@
 data:
   cache_dir: .cache/huggingface
   enabled_datasets:
-    # - mmstar
+    - mmstar
     - mmmu
     - mathvista
     - mathvision
