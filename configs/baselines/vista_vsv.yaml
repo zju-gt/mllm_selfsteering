@@ -1,0 +1,14 @@
+# Isolated defaults for VISTA's VSV-Only ablation on Qwen3-VL.
+experiment:
+  generation:
+    backend: transformers
+
+vista_vsv:
+  # The paper reports architecture-specific values from 0.10 to 0.17 for
+  # open-ended generation. Qwen3-VL was not evaluated; tune this on validation.
+  lambda: 0.1
+  construction: image_minus_text
+  injection: official_norm_preserving_mlp
+  storage_dtype: float16
+  consecutive_error_limit: 3
+
