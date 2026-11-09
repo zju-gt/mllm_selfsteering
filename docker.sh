@@ -2,11 +2,12 @@
 set -euo pipefail
 
 PROJECT_ROOT=/sdb/duyuetian/iclr_selfsteering/mllm_selfsteering
-MODEL_DIR=/sda/llm_weights/Qwen3-VL-8B-Instruct
+# MODEL_DIR=/sdc/wangyucheng/models/self-steering-7B
+MODEL_DIR="${MODEL_DIR:-/sda/llm_weights/Qwen3-VL-8B-Instruct}"
 HF_CACHE_DIR=/sdb/duyuetian/.cache/huggingface
 
-GPU_IDS="${GPU_IDS:-1,2}"
-TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-2}"
+GPU_IDS="${GPU_IDS:-5}"
+TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 PROXY_PORT="${PROXY_PORT:-27890}"
 
 if [ ! -d "$PROJECT_ROOT/data" ]; then

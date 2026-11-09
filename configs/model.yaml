@@ -1,5 +1,6 @@
 model:
   name: /sda/llm_weights/Qwen3-VL-8B-Instruct
+  # name: /sdc/wangyucheng/models/self-steering-7B
   revision: main  # Pin to a commit SHA before a formal run.
   cache_dir: null
   dtype: bfloat16

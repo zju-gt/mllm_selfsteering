@@ -148,6 +148,173 @@ stages 05-06 only when selecting vectors that were captured with that pair limit
 The legacy `--limit N` still applies one value to every scope. Limits are part of
 artifact identities, so smoke artifacts cannot overwrite a formal run.
 
+## Table 2: frozen-model steering strategies
+
+Activate the project environment (`conda activate mllm-steer`) and run from this
+directory. Stage 08 defaults to `outputs/preparation_1105_0414` and inherits its
+checkpoint (`/sdc/wangyucheng/models/self-steering-7B`), six-vector order, target
+layer, and vector scaling. It disables baseline-no-answer gating and evaluates
+every item with a paired baseline from the same checkpoint.
+
+Start a matching server in a tmux window:
+
+```bash
+MODEL_DIR=/sdc/wangyucheng/models/self-steering-7B bash docker.sh
+```
+
+After the server is ready, run one mode in another tmux window:
+
+```bash
+python scripts/08_various_steering.py single
+```
+
+For defaults collected in one editable shell script, use `table2.sh`:
+
+```bash
+conda activate mllm-steer
+bash table2.sh single --dry-run
+bash table2.sh single
+bash table2.sh random --merge-base /path/to/base.jsonl
+
+# Environment variables also override defaults; extra CLI arguments take priority.
+MERGE_BASE=/path/to/base.jsonl SUBSET_FRACTION=0.3 bash table2.sh visual
+SUBSET_FRACTION=1.0 bash table2.sh self
+bash table2.sh single --run-dir outputs/table2_single_MMDD_HHMM
+```
+
+The shell defaults to `single`, 30% per dataset, sampling seed 42, random seed
+36, concurrency 8, global scale 1.0, max new tokens 8192, and the trained bank
+`outputs/preparation_1105_0414`. MathVision defaults to the 3040-item test in
+both entry points. Set `MERGE_BASE` or pass `--merge-base` for hybrid outputs;
+without a reference, the shell runs only the subset. Edit the defaults at the
+top of `table2.sh`, or set their environment variables, including `BASE_URL`,
+`PREPARATION_DIR`, `RUN_DIR`, `ROUTING_CACHE_DIR` and `PYTHON_BIN`. Relative paths
+are resolved from the project root, even when the shell is invoked elsewhere.
+The shell expects an active project Python environment and a running model
+server. Direct Python invocation retains its default full evaluation fraction.
+
+| Mode | Weights |
+|---|---|
+| `none` | All zero; no steering or routing requests. |
+| `single` | First vector in the preparation config (`text_logic`): 1; others: 0. |
+| `all` | All six weights are exactly `1/6`. |
+| `random` | Independent per-item Dirichlet(1,1,1,1,1,1) weights, summing to 1. |
+| `text` | Route all six, remove visual weights, renormalize the remainder. |
+| `visual` | Route all six, remove textual weights, renormalize the remainder. |
+| `self` | Full adaptive six-capability routing. |
+
+Text/visual masks preserve zero-vector bypass when no retained weight is positive.
+`self`, `text`, and `visual` share original routing results under
+`outputs/table2_routing/`, keyed by configuration, vector contents, and item
+identity. Retain this cache when comparing these modes. Fixed and random modes
+do not call the router. Random weights are independent of processing order;
+`--random-seed` changes weights without changing the solver's seed.
+
+```bash
+# Check model, vectors, actual input files and item counts without an API call.
+python scripts/08_various_steering.py single --dry-run
+
+# One item per selected dataset, then an independent random replicate.
+python scripts/08_various_steering.py all --datasets mmstar mathvista --eval-limit 1
+python scripts/08_various_steering.py random --random-seed 37
+
+# Resume: repeat the same mode, seed, dataset and semantic overrides.
+python scripts/08_various_steering.py single --run-dir outputs/table2_single_MMDD_HHMM
+
+# Change endpoint or concurrency; --mode single is also accepted.
+python scripts/08_various_steering.py --mode single --base-url http://127.0.0.1:8770/v1 --concurrency 8
+```
+
+Each run creates `outputs/table2_<mode>_MMDD_HHMM/` with `config.json`,
+`selections.jsonl`, `generations.jsonl`, `metrics.json`, `metrics.csv` and
+`table2.csv`. The Table 2 CSV uses percentage accuracies and the macro-average
+across enabled datasets. Incomplete runs are marked as such, have no final Avg,
+and exit with an error so they can be resumed. Changing mode or random seed in
+an existing run directory is rejected.
+
+Stage 08 defaults MathVision to the **3040-item test** in `mathvision.jsonl`
+before applying explicit CLI overrides. Select the same population for every
+Table 2 row. To explicitly use the **304-item testmini** instead:
+
+```bash
+python scripts/08_various_steering.py single \
+  --override data.sources.mathvision.local_path=data/processed/mathvision_testmini.jsonl \
+  --override data.sources.mathvision.split=testmini \
+  --override data.sources.mathvision.source_split=testmini
+```
+
+`--preparation-dir` and the standard `--override key=value` options remain
+available. The server must expose the bank's checkpoint; model mismatches fail
+before generation. Stage 08 defaults to the existing vLLM-Hook v0.2 protocol.
+
+### Subset evaluation and hybrid previews
+
+Use `--subset-fraction 0.3` to evaluate approximately 30% of **each** enabled
+dataset, and `--merge-base` to fill the complement from an existing result file:
+
+```bash
+python scripts/08_various_steering.py single \
+  --subset-fraction 0.3 --subset-seed 42 \
+  --merge-base /path/to/base.jsonl
+
+# Change only the method to compare on the same sampled questions.
+python scripts/08_various_steering.py random \
+  --subset-fraction 0.3 --subset-seed 42 --random-seed 36 \
+  --merge-base /path/to/base.jsonl
+
+# Check sample counts, reference coverage and identity without inference.
+python scripts/08_various_steering.py single \
+  --subset-fraction 0.3 --subset-seed 42 \
+  --merge-base /path/to/base.jsonl --dry-run
+```
+
+Sampling ranks sample identities by a seeded hash, rounds each dataset's count
+up, and preserves the original output order. The same `--subset-seed`, data
+population and fraction select the same questions across all seven methods,
+independently of `--random-seed` and processing order. For the current default
+datasets, 30% selects 450 MMStar, 270 MMMU, 300 MathVista and 912 MathVision
+test questions. `--eval-limit`, if specified, applies **before** sampling.
+Omitting `--merge-base` runs only the subset. The default fraction is `1.0`,
+which retains full evaluation.
+
+The reference can be an existing `baseline.jsonl` or `generations.jsonl`.
+Each relevant row needs `dataset`, `item_id`, `item_identity`, and either
+`raw_output` / `baseline_raw_output` or `predicted_answer` /
+`baseline_predicted_answer`. Only successful rows (`status: "ok"`, or no status
+field) are reused. A full reference file is recommended: its sampled questions
+also allow direct consistency comparisons. A file containing only the
+complement is accepted; consistency metrics then report zero compared items.
+Different run IDs for the same sample are rejected; retries within one run use
+the last successful row. Answers are scored again against the current gold
+answers. Missing complementary rows, mismatched sample identities, gold
+answers, or answer types stop the run before inference.
+
+The run directory contains separate artifacts:
+
+| File | Meaning |
+|---|---|
+| `subset_manifest.json` | Sampling parameters, per-dataset counts, every sample's assignment, and reference fingerprint. |
+| `generations.jsonl`, `metrics.json`, `table2.csv` | Actual subset inference and subset-only scores, labelled `evaluation_scope: subset`. |
+| `hybrid_generations.jsonl` | Full-population preview: new subset outputs plus reused reference outputs; every row records its source. |
+| `hybrid_metrics.json`, `hybrid_table2.csv` | Explicitly labelled hybrid scores and per-dataset macro-average. The JSON also reports parsed-answer agreement, paired accuracy delta, and wrong-to-right / right-to-wrong counts on the overlapping subset. |
+
+The hybrid score measures the requested mixture; the subset score measures the
+method on the sampled questions. Failed sampled questions remain incomplete in
+both outputs and are never replaced by reference answers. The reference file
+is read-only and its contents are frozen by SHA-256. Resume with the same
+fraction, sampling seed, reference and method (plus random seed for `random`):
+
+```bash
+python scripts/08_various_steering.py single \
+  --subset-fraction 0.3 --subset-seed 42 \
+  --merge-base /path/to/base.jsonl \
+  --run-dir outputs/table2_single_MMDD_HHMM
+```
+
+Stage 08 resolves migrated `.../data/images/...` paths to existing images under
+this project in memory, including legacy Windows paths. Source JSONL files are
+not rewritten; missing local images still fail explicitly.
+
 ## Contrast pairs
 
 Generate the six configured files with `python scripts/00_prepare_pairs.py`, or

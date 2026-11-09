@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import csv
 from decimal import Decimal, ROUND_HALF_UP
 import hashlib
@@ -41,6 +42,7 @@ from mllm_self_steering.runs import (
     validate_generation_resume,
     write_run_config,
 )
+from mllm_self_steering.subsets import prepare_subset, write_hybrid_outputs
 from mllm_self_steering.utils.io import (
     JsonlCheckpointWriter,
     atomic_save_json,
@@ -48,6 +50,14 @@ from mllm_self_steering.utils.io import (
     repair_truncated_jsonl,
     sha256_file,
     sha256_text,
+)
+from mllm_self_steering.various import (
+    ROUTED_MODES,
+    evaluation_item,
+    evaluation_path,
+    publish_route,
+    strategy_weights,
+    write_table2_report,
 )
 
 
@@ -302,7 +312,6 @@ def _adaptive_run_id(
     prompt_hash: str,
     contract: str = "adaptive-capability-steering-v3-stable-vector-fingerprints",
 ) -> str:
-    data_dir, _ = _paths(config, project_root)
     adaptive = config["experiment"].get("adaptive_steering", {})
     vllm = config["experiment"].get("vllm_hook", {})
     semantic_adaptive = {
@@ -343,10 +352,16 @@ def _adaptive_run_id(
         },
         "eval_limit": _runtime_limit(config, "eval"),
         "evaluation": {
-            name: sha256_file(data_dir / "processed" / f"{name}.jsonl")
+            name: sha256_file(evaluation_path(config, project_root, name))
             for name in config["data"]["enabled_datasets"]
         },
     }
+    if "various_steering" in config["experiment"]:
+        identity["various_steering"] = {
+            key: value for key, value in config["experiment"]["various_steering"].items()
+            if key != "routing_cache_dir"
+        }
+        identity["model_settings"] = config["model"]
     return sha256_text(
         json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     )[:16]
@@ -663,6 +678,9 @@ def run_adaptive_steering(
     capabilities = list(capabilities_by_id)
     adaptive = config["experiment"].get("adaptive_steering", {})
     vllm = config["experiment"].get("vllm_hook", {})
+    various = config["experiment"].get("various_steering")
+    steering_mode = str(various["mode"]) if various is not None else "self"
+    routing_cache_root: Path | None = None
     scaling = str(config["experiment"]["vector_scaling"])
     form = {"mean_norm": "steering", "raw": "raw", "unit": "unit"}[scaling]
     base_vectors, base_vector_paths, vector_fingerprints = _load_base_vectors(
@@ -685,6 +703,49 @@ def run_adaptive_steering(
             else "adaptive-capability-steering-v2-normalized-weights"
         ),
     )
+    if various is not None and steering_mode in ROUTED_MODES and various.get("routing_cache_dir"):
+        cache_config = deepcopy(config)
+        cache_config["experiment"]["various_steering"] = {
+            "contract": various["contract"], "mode": "self", "random_seed": None,
+        }
+        cache_key = _adaptive_run_id(
+            cache_config, project_root, capture_id=capture_id,
+            vector_fingerprints=vector_fingerprints, prompt_hash=prompt_hash,
+            contract="table2-shared-routing-v1",
+        )
+        routing_cache_root = Path(various["routing_cache_dir"]) / cache_key
+    items: list[MultimodalItem] = []
+    for dataset in config["data"]["enabled_datasets"]:
+        rows = list(read_jsonl(evaluation_path(config, project_root, dataset)))
+        items.extend(
+            evaluation_item(row, project_root) if various is not None
+            else MultimodalItem.from_dict(row)
+            for row in _limit(config, rows, scope="eval")
+        )
+    item_records: list[tuple[MultimodalItem, list[str], str]] = []
+    for item in items:
+        image_hashes = _image_hashes(item)
+        item_records.append(
+            (item, image_hashes, item_identity(item, image_hashes=image_hashes))
+        )
+    full_records = item_records
+    subset_plan = prepare_subset(config, full_records)
+    if subset_plan is not None:
+        if not explicit_run_layout:
+            raise ValueError("subset evaluation requires explicit preparation and generation directories")
+        # Sampling depends on image bytes, which the source JSONL hash cannot cover.
+        # Validate this before updating config.json or replacing the old manifest.
+        experiment_fingerprint = sha256_text(json.dumps({
+            "experiment": experiment_fingerprint,
+            "population_identities": sorted(
+                (record[0].dataset, record[2]) for record in full_records
+            ),
+        }, sort_keys=True))[:16]
+        item_records = [
+            record for record in full_records
+            if (record[0].dataset, record[2]) in subset_plan.selected_keys
+        ]
+
     run_metadata: dict[str, Any] | None = None
     if explicit_run_layout:
         assert preparation_dir is not None and generation_dir is not None
@@ -716,20 +777,6 @@ def run_adaptive_steering(
     else:
         run_id = experiment_fingerprint
 
-    items: list[MultimodalItem] = []
-    for dataset in config["data"]["enabled_datasets"]:
-        rows = list(read_jsonl(data_dir / "processed" / f"{dataset}.jsonl"))
-        items.extend(
-            MultimodalItem.from_dict(row)
-            for row in _limit(config, rows, scope="eval")
-        )
-    item_records: list[tuple[MultimodalItem, list[str], str]] = []
-    for item in items:
-        image_hashes = _image_hashes(item)
-        item_records.append(
-            (item, image_hashes, item_identity(item, image_hashes=image_hashes))
-        )
-
     if explicit_run_layout:
         selection_path = outputs / "selections.jsonl"
         baseline_path = outputs / "baselines.jsonl"
@@ -742,6 +789,8 @@ def run_adaptive_steering(
         generation_path = outputs / "adaptive_generations" / f"{run_id}.jsonl"
         metrics_json = outputs / "adaptive_metrics" / f"{run_id}.json"
         metrics_csv = outputs / "adaptive_metrics" / f"{run_id}.csv"
+    if subset_plan is not None:
+        atomic_save_json(outputs / "subset_manifest.json", subset_plan.manifest)
     selection_success = _canonical_rows(
         selection_path, run_id, successful_only=True
     )
@@ -891,7 +940,10 @@ def run_adaptive_steering(
                     ]["baseline_predicted_answer"] is None
                 )
             ]
-            if incomplete_generation and bool(vllm.get("verify_steering_effect", True)):
+            if (
+                incomplete_generation and steering_mode != "none"
+                and bool(vllm.get("verify_steering_effect", True))
+            ):
                 probe_item, probe_hashes, _ = incomplete_generation[0]
                 probe_capability = capabilities[0]
                 probe_messages = build_vllm_messages(
@@ -952,6 +1004,42 @@ def run_adaptive_steering(
                         adaptive.get("selector_temperature", 0.6)
                     ),
                 }
+                if various is not None:
+                    base["steering_mode"] = steering_mode
+                    if steering_mode not in ROUTED_MODES:
+                        return {
+                            **base,
+                            "selector_raw_output": None,
+                            "selector_raw_outputs": [],
+                            "selector_attempts": 0,
+                            "weights": strategy_weights(
+                                steering_mode, list(capabilities_by_id.values()), identity,
+                                seed=int(various.get("random_seed") or 0),
+                            ),
+                            "status": "ok",
+                        }
+                cache_path = (
+                    routing_cache_root / item.dataset / f"{identity}.json"
+                    if routing_cache_root is not None else None
+                )
+                if cache_path is not None and cache_path.is_file():
+                    cached = json.loads(cache_path.read_text(encoding="utf-8"))
+                    routed_weights = parse_capability_weights(
+                        cached["selector_raw_output"], capabilities,
+                        weight_min=float(adaptive.get("weight_min", 0.0)),
+                        weight_max=float(adaptive.get("weight_max", 1.0)),
+                        quantum=float(adaptive.get("weight_quantum", 0.05)),
+                    )
+                    return {
+                        **base, **cached,
+                        "routed_weights": routed_weights,
+                        "weights": strategy_weights(
+                            steering_mode, list(capabilities_by_id.values()), identity,
+                            seed=base_seed, routed_weights=routed_weights,
+                        ),
+                        "routing_cache_hit": True,
+                        "status": "ok",
+                    }
                 system_prompt, selector_prompt = build_selector_prompts(
                     capabilities_by_id, item.prompt, version=prompt_version
                 )
@@ -1006,11 +1094,38 @@ def run_adaptive_steering(
                             weight_max=float(adaptive.get("weight_max", 1.0)),
                             quantum=float(adaptive.get("weight_quantum", 0.05)),
                         )
+                        routing_fields: dict[str, Any] = {}
+                        selector_attempts = attempt + 1
+                        if various is not None:
+                            if cache_path is not None:
+                                cached = publish_route(cache_path, {
+                                    "selector_raw_output": raw,
+                                    "selector_raw_outputs": raw_outputs,
+                                    "selector_attempts": selector_attempts,
+                                })
+                                raw = cached["selector_raw_output"]
+                                raw_outputs = cached["selector_raw_outputs"]
+                                selector_attempts = cached["selector_attempts"]
+                                weights = parse_capability_weights(
+                                    raw, capabilities,
+                                    weight_min=float(adaptive.get("weight_min", 0.0)),
+                                    weight_max=float(adaptive.get("weight_max", 1.0)),
+                                    quantum=float(adaptive.get("weight_quantum", 0.05)),
+                                )
+                            routing_fields = {
+                                "routed_weights": dict(weights),
+                                "routing_cache_hit": False,
+                            }
+                            weights = strategy_weights(
+                                steering_mode, list(capabilities_by_id.values()), identity,
+                                seed=base_seed, routed_weights=weights,
+                            )
                         return {
                             **base,
+                            **routing_fields,
                             "selector_raw_output": raw,
                             "selector_raw_outputs": raw_outputs,
-                            "selector_attempts": attempt + 1,
+                            "selector_attempts": selector_attempts,
                             "weights": weights,
                             "status": "ok",
                         }
@@ -1153,6 +1268,10 @@ def run_adaptive_steering(
                     "composition": composition,
                     "steering_applied": server_vector is not None,
                 }
+                if various is not None:
+                    base["steering_mode"] = steering_mode
+                    base["random_seed"] = various.get("random_seed")
+                    base["routed_weights"] = selection.get("routed_weights") if selection else None
                 messages = build_vllm_messages(
                     item.prompt,
                     item.image_paths,
@@ -1252,8 +1371,14 @@ def run_adaptive_steering(
         finally:
             await client.close()
 
+    execution_error: BaseException | None = None
     if len(generation_success) < len(item_records):
-        asyncio.run(execute())
+        try:
+            asyncio.run(execute())
+        except BaseException as error:
+            if various is None:
+                raise
+            execution_error = error
 
     selection_latest = _canonical_rows(
         selection_path, run_id, successful_only=False
@@ -1279,8 +1404,34 @@ def run_adaptive_steering(
     }
     if baseline_no_answer_only:
         artifacts["baselines"] = baseline_path
-    _write_stage_manifest(config, outputs, "07_run_adaptive_steering", artifacts)
+    if various is not None:
+        artifacts["table2_csv"] = write_table2_report(
+            metrics_json, config, project_root,
+            interrupted=execution_error is not None,
+        )
+    if subset_plan is not None:
+        artifacts["subset_manifest"] = outputs / "subset_manifest.json"
+        if subset_plan.settings.get("merge_base"):
+            artifacts.update(write_hybrid_outputs(
+                outputs, full_records, generation_success, subset_plan,
+                mode=steering_mode, run_id=run_id,
+                random_seed=various.get("random_seed"),
+                interrupted=execution_error is not None,
+            ))
+    _write_stage_manifest(
+        config, outputs,
+        "08_various_steering" if various is not None else "07_run_adaptive_steering",
+        artifacts,
+    )
     if run_metadata is not None:
-        run_metadata["status"] = "complete"
+        run_metadata["status"] = (
+            "incomplete" if various is not None and (
+                execution_error is not None
+                or len(generation_success) != len(item_records)
+            )
+            else "complete"
+        )
         artifacts["config"] = write_run_config(outputs, run_metadata)
+    if execution_error is not None:
+        raise execution_error
     return artifacts

@@ -28,7 +28,7 @@ experiment:
   target_layer: 23
   vector_scaling: mean_norm
   alphas: [-1.0, -0.5, 0.0, 0.5, 1.0]
-  seed: 39
+  seed: 36
   generation:
     backend: transformers  # transformers | vllm_hook
     checkpoint_rows: 100
